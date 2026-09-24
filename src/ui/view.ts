@@ -9,9 +9,10 @@ export interface ViewActions {
   onRefreshDiff(): void;
   onResetProposal(): void;
   onSkip(): void;
-  onExclude(): void;
+  onExcludeOccurrence(id: string, reason: string): void;
   onRemoveExclusion(key: string): void;
   onClearExclusions(): void;
+  onPublishExclusions(): void;
   onSave(summary: string): void;
   onQueueSelect(candidate: Candidate): void;
 }
@@ -50,14 +51,16 @@ export class TypoSpotterView {
   private readonly editButton = element("button", "ts-button ts-button-quiet");
   private readonly resetButton = element("button", "ts-button ts-button-quiet");
   private readonly skipButton = element("button", "ts-button");
-  private readonly excludeButton = element("button", "ts-button ts-button-quiet ts-button-danger");
   private readonly exclusionsButton = element("button", "ts-button ts-button-quiet");
+  private readonly publishExclusionsButton = element("button", "ts-button ts-button-primary");
   private readonly exclusionsPanel = element("section", "ts-exclusions-panel");
   private readonly exclusionsList = element("div", "ts-exclusions-list");
   private readonly saveButton = element("button", "ts-button ts-button-primary");
   private readonly diffPanel = element("section", "ts-panel ts-diff-panel");
   private readonly editorPanel = element("section", "ts-panel ts-editor-panel");
   private readonly statsNodes = new Map<keyof SessionStats, HTMLElement>();
+  private currentOccurrenceIds: string[] = [];
+  private pendingExclusionCount = 0;
   private actions?: ViewActions;
 
   constructor(container: HTMLElement) {
@@ -141,7 +144,10 @@ export class TypoSpotterView {
     clear.type = "button";
     clear.textContent = "Clear all";
     clear.addEventListener("click", () => this.actions?.onClearExclusions());
-    footer.append(clear);
+    this.publishExclusionsButton.type = "button";
+    this.publishExclusionsButton.textContent = "Publish pending";
+    this.publishExclusionsButton.addEventListener("click", () => this.actions?.onPublishExclusions());
+    footer.append(clear, this.publishExclusionsButton);
     this.exclusionsPanel.append(header, description, this.exclusionsList, footer);
   }
 
@@ -208,9 +214,6 @@ export class TypoSpotterView {
     this.skipButton.type = "button";
     this.skipButton.textContent = "Skip  S";
     this.skipButton.addEventListener("click", () => this.actions?.onSkip());
-    this.excludeButton.type = "button";
-    this.excludeButton.textContent = "Not a typo  X";
-    this.excludeButton.addEventListener("click", () => this.actions?.onExclude());
     this.editButton.type = "button";
     this.editButton.textContent = "Edit wikitext  E";
     this.editButton.addEventListener("click", () => this.toggleEditor());
@@ -218,7 +221,7 @@ export class TypoSpotterView {
     this.saveButton.type = "button";
     this.saveButton.textContent = "Save and next  A";
     this.saveButton.addEventListener("click", () => this.actions?.onSave(this.summary.value));
-    actions.append(this.skipButton, this.excludeButton, this.editButton, spacer, this.saveButton);
+    actions.append(this.skipButton, this.editButton, spacer, this.saveButton);
 
     const workspace = element("div", "ts-workspace");
     workspace.append(this.diffPanel, this.editorPanel);
@@ -234,7 +237,10 @@ export class TypoSpotterView {
     const shortcuts: Record<string, () => void> = {
       a: () => this.actions?.onSave(this.summary.value),
       s: () => this.actions?.onSkip(),
-      x: () => this.actions?.onExclude(),
+      x: () => {
+        if (this.currentOccurrenceIds.length === 1) this.excludeOccurrence(this.currentOccurrenceIds[0]!);
+        else this.setStatus("Choose Not a typo beside the specific occurrence.");
+      },
       r: () => this.actions?.onRefreshDiff(),
       e: () => this.toggleEditor()
     };
@@ -299,8 +305,14 @@ export class TypoSpotterView {
     });
   }
 
-  renderExclusions(entries: ExclusionEntry[]): void {
+  renderExclusions(entries: ExclusionEntry[], sharedCount = 0): void {
     this.exclusionsButton.textContent = `Not typos (${entries.length})`;
+    const pendingCount = entries.filter((entry) => entry.pending).length;
+    this.pendingExclusionCount = pendingCount;
+    this.publishExclusionsButton.disabled = pendingCount === 0;
+    this.publishExclusionsButton.textContent = pendingCount > 0 ? `Publish pending (${pendingCount})` : "Publish pending";
+    const description = this.exclusionsPanel.querySelector<HTMLElement>(".ts-exclusions-description");
+    if (description) description.textContent = `${sharedCount} shared exclusions loaded. Local exclusions stay in this browser until published.`;
     this.exclusionsList.replaceChildren();
     if (entries.length === 0) {
       const empty = element("p", "ts-exclusions-empty");
@@ -314,7 +326,9 @@ export class TypoSpotterView {
       const title = element("div", "ts-exclusion-title");
       title.textContent = entry.title;
       const rule = element("div", "ts-exclusion-rule");
-      rule.textContent = entry.replacement ? `${entry.find} → ${entry.replacement}` : entry.find;
+      const location = entry.lineNumber ? ` · original line ${entry.lineNumber}` : "";
+      const pending = entry.pending ? " · pending" : "";
+      rule.textContent = `${entry.replacement ? `${entry.find} → ${entry.replacement}` : entry.find}${location}${pending}`;
       details.append(title, rule);
       const remove = element("button", "ts-button ts-button-quiet ts-button-danger");
       remove.type = "button";
@@ -354,6 +368,7 @@ export class TypoSpotterView {
 
   renderOccurrences(proposal: Proposal): void {
     this.occurrenceList.replaceChildren();
+    this.currentOccurrenceIds = proposal.occurrences.map((occurrence) => occurrence.id);
     for (const occurrence of proposal.occurrences) {
       const label = element("label", "ts-occurrence");
       const checkbox = element("input");
@@ -372,12 +387,26 @@ export class TypoSpotterView {
       const after = element("span", "ts-context-after");
       after.textContent = occurrence.after;
       context.append(before, found, separator, replaced, after);
-      label.append(checkbox, context);
+      const exclude = element("button", "ts-button ts-button-quiet ts-button-danger ts-occurrence-exclude");
+      exclude.type = "button";
+      exclude.textContent = "Not a typo";
+      exclude.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this.excludeOccurrence(occurrence.id);
+      });
+      label.append(checkbox, context, exclude);
       this.occurrenceList.append(label);
     }
     this.occurrenceHelp.textContent = proposal.manuallyEdited
       ? "Occurrence controls are paused because the proposed wikitext was edited manually. Reset to use them again."
       : "Uncheck any occurrence that should remain unchanged, then refresh the diff.";
+  }
+
+  private excludeOccurrence(id: string): void {
+    const reason = window.prompt("Why should this occurrence remain unchanged?", "Direct quotation");
+    if (reason === null) return;
+    this.actions?.onExcludeOccurrence(id, reason.trim().slice(0, 200));
   }
 
   setEditorText(text: string): void {
@@ -452,10 +481,13 @@ export class TypoSpotterView {
     this.refreshButton.disabled = busy;
     this.resetButton.disabled = busy;
     this.skipButton.disabled = busy;
-    this.excludeButton.disabled = busy;
     this.editButton.disabled = busy;
     this.editor.disabled = busy;
     this.summary.disabled = busy;
+    this.publishExclusionsButton.disabled = busy || this.pendingExclusionCount === 0;
+    this.occurrenceList.querySelectorAll<HTMLButtonElement>(".ts-occurrence-exclude").forEach((button) => {
+      button.disabled = busy;
+    });
     if (busy) this.saveButton.disabled = true;
   }
 

@@ -1,0 +1,7 @@
+<!-- This data is maintained by TypoSpotter. Review changes in the page history. -->
+<syntaxhighlight lang="json">
+{
+  "version": 1,
+  "exclusions": []
+}
+</syntaxhighlight>

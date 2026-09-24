@@ -59,7 +59,7 @@ The central pane is primary. The queue can collapse on narrower screens. Use nor
 - **Save and next**: submit exactly the text currently shown in the editable proposal, then load the next candidate only after confirmed success.
 - **Refresh diff**: regenerate the diff after the editor changes the proposal.
 - **Skip**: record a session-only skip and advance without editing.
-- **Not a typo**: skip and optionally remember this title/rule pair locally, so it is not offered again on that browser.
+- **Not a typo**: remember one occurrence using its page ID, source revision, original line number, matched text, and normalized surrounding-context fingerprint. Queue decisions locally and publish an explicitly reviewed batch to `User:SuperCode111/TypoSpotter/Exclusions`.
 - **Open article / history**: open normal Wikipedia views in another tab.
 - **Previous**: revisit display state, but never silently undo an already saved edit.
 
@@ -114,7 +114,7 @@ interface CandidateSource {
 - Fetch detail for the current item and prefetch at most the next one or two.
 - Do not repeatedly search while the editor is idle.
 - Validate search results against freshly fetched wikitext and the current user's edit permission before adding them to the visible queue. Search-index mismatches and pages with no safe occurrences are filtered silently during background replenishment.
-- Session state may live in `sessionStorage`; durable settings and “not a typo on this page” exceptions may use `mw.storage`/`localStorage` with a versioned schema.
+- Session state may live in `sessionStorage`; durable occurrence exclusions use `mw.storage`/`localStorage` with a versioned schema. Shared exclusions are fetched once per session and relocate across revisions only on one unique context-fingerprint match.
 
 ## Safe proposal generation
 
@@ -194,7 +194,7 @@ Do not set the `bot` flag. Do not send a custom change tag unless the tag has ac
 Default summary format:
 
 ```text
-Fix typo: "recieve" -> "receive" ([[User:SuperCode111/TypoSpotter|TS v0.4.0]])
+Fix typo: "recieve" -> "receive" ([[User:SuperCode111/TypoSpotter|TS v0.5.0]])
 ```
 
 Use straight ASCII quotation marks and `->` exactly as shown. The link label contains the version of the script that performed the edit and must be generated from the same version constant used by the application UI and bundle metadata rather than repeated as an unrelated string.

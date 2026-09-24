@@ -48,12 +48,26 @@ export interface PreparedCandidate {
 
 export interface ExclusionEntry {
   key: string;
+  scope: "page" | "occurrence";
   pageId: number;
   title: string;
   ruleId: string;
   find: string;
   replacement: string;
+  revisionId?: number;
+  lineNumber?: number;
+  matched?: string;
+  before?: string;
+  after?: string;
+  contextHash?: string;
+  reason?: string;
   createdAt: string;
+  pending: boolean;
+}
+
+export interface CommunityExclusionDocument {
+  version: 1;
+  exclusions: ExclusionEntry[];
 }
 
 export interface SessionStats {

@@ -2,7 +2,7 @@
 
 TypoSpotter is a human-reviewed typo fixing userscript for English Wikipedia. It searches for a small catalog of likely misspellings, loads the current article wikitext, presents a focused review diff with surrounding context, and saves only after the editor explicitly approves the proposal.
 
-Version 0.4.0 is an initial working release intended for sandbox and limited manual testing.
+Version 0.5.0 is an initial working release intended for sandbox and limited manual testing.
 
 ## Versioning
 
@@ -38,7 +38,9 @@ TypoSpotter fills the browser viewport and keeps scrolling inside its queue, dif
 - `E` — switch from the diff to the wikitext editor
 - `Escape` — leave the wikitext editor and return to the diff
 
-Queue entries are clickable, so candidates can be reviewed out of order. The current candidate returns to the queue when another one is selected. TypoSpotter replenishes the queue in the background and displays a page only after confirming that the current revision is editable and contains at least one safe occurrence. **Not a typo** saves the page and spelling pair in browser-local storage; the **Not typos** panel lists those exclusions and lets the editor remove them. `Commonly misspelled English words` is permanently excluded from discovery because its examples are intentional.
+Queue entries are clickable, so candidates can be reviewed out of order. The current candidate returns to the queue when another one is selected. TypoSpotter replenishes the queue in the background and displays a page only after confirming that the current revision is editable and contains at least one safe occurrence. **Not a typo** beside an occurrence stores an anchor containing its source revision, original line, matched text, and surrounding-context fingerprint. The **Not typos** panel lists local decisions and publishes pending entries to `User:SuperCode111/TypoSpotter/Exclusions` in one batch. `Commonly misspelled English words` is permanently excluded from discovery because its examples are intentional.
+
+The shared exclusions page must exist before publishing. Create `User:SuperCode111/TypoSpotter/Exclusions` with the contents of [`wikipedia/Exclusions.wikitext`](wikipedia/Exclusions.wikitext). The registry is loaded once at startup. An exclusion follows an occurrence to a later revision only when its context fingerprint has exactly one match; changed or ambiguous text returns to the review queue.
 
 ## Build
 

@@ -1,5 +1,5 @@
 // <nowiki>
-// TypoSpotter v0.4.0
+// TypoSpotter v0.5.0
 // Source: https://github.com/code2344/TypoSpotter
 "use strict";
 (() => {
@@ -111,6 +111,40 @@
         throw normalizeError(error);
       }
     }
+    async loadPageByTitle(title) {
+      try {
+        const response = await this.api.get({
+          action: "query",
+          titles: title,
+          prop: "info|revisions",
+          intestactions: "edit",
+          intestactionsdetail: "boolean",
+          rvprop: "ids|timestamp|content|contentmodel",
+          rvslots: "main",
+          curtimestamp: 1,
+          format: "json",
+          formatversion: 2,
+          maxlag: 5
+        });
+        const page = response.query?.pages?.[0];
+        const revision = page?.revisions?.[0];
+        const slot = revision?.slots?.main;
+        if (!page || page.missing || !revision || typeof slot?.content !== "string") {
+          throw new TypoSpotterApiError(`${title} must exist before shared exclusions can be used.`, "missingcontent");
+        }
+        return {
+          pageId: page.pageid,
+          title: page.title,
+          revisionId: revision.revid,
+          baseTimestamp: revision.timestamp,
+          startTimestamp: response.curtimestamp,
+          contentModel: slot.contentmodel || "wikitext",
+          text: slot.content
+        };
+      } catch (error) {
+        throw normalizeError(error);
+      }
+    }
     async edit(snapshot, text, summary) {
       try {
         const response = await this.api.postWithEditToken({
@@ -139,10 +173,11 @@
   };
 
   // src/config.ts
-  var VERSION = "0.4.0";
+  var VERSION = "0.5.0";
   var RUN_PAGE = "User:SuperCode111/TypoSpotter/run";
   var ABOUT_PAGE = "User:SuperCode111/TypoSpotter";
   var EXCLUSIONS_KEY = "TypoSpotter-exclusions-v1";
+  var COMMUNITY_EXCLUSIONS_PAGE = "User:SuperCode111/TypoSpotter/Exclusions";
   var QUEUE_TARGET = 24;
   var IGNORED_TITLES = /* @__PURE__ */ new Set([
     "commonly misspelled english words"
@@ -232,6 +267,63 @@
   ];
 
   // src/state/exclusions.ts
+  var CONTEXT_LENGTH = 160;
+  function normalizeContext(value) {
+    return value.normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase();
+  }
+  function fnv1a(value) {
+    let hash = 2166136261;
+    for (let index = 0; index < value.length; index += 1) {
+      hash ^= value.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return `fnv1a:${(hash >>> 0).toString(16).padStart(8, "0")}`;
+  }
+  function occurrenceAnchor(occurrence) {
+    const before = normalizeContext(occurrence.before.slice(-CONTEXT_LENGTH));
+    const after = normalizeContext(occurrence.after.slice(0, CONTEXT_LENGTH));
+    return {
+      before,
+      after,
+      contextHash: fnv1a(`${before}\u241F${occurrence.matched.toLowerCase()}\u241F${after}`)
+    };
+  }
+  function occurrenceLine(text, occurrence) {
+    return text.slice(0, occurrence.start).split("\n").length;
+  }
+  function exclusionMatches(entry, candidate, snapshot, occurrence) {
+    if (entry.pageId !== candidate.pageId || entry.ruleId !== candidate.rule.id) return false;
+    if (entry.scope === "page") return true;
+    const anchor = occurrenceAnchor(occurrence);
+    if (!entry.contextHash || anchor.contextHash !== entry.contextHash || anchor.before !== entry.before || anchor.after !== entry.after) return false;
+    if (entry.revisionId === snapshot.revisionId) {
+      return entry.lineNumber === occurrenceLine(snapshot.text, occurrence) && entry.matched?.toLowerCase() === occurrence.matched.toLowerCase();
+    }
+    return true;
+  }
+  function validEntry(item) {
+    if (!item || typeof item !== "object") return void 0;
+    const entry = item;
+    if (typeof entry.key !== "string" || typeof entry.pageId !== "number" || typeof entry.ruleId !== "string" || typeof entry.title !== "string") return void 0;
+    return {
+      key: entry.key,
+      scope: entry.scope === "occurrence" ? "occurrence" : "page",
+      pageId: entry.pageId,
+      title: entry.title,
+      ruleId: entry.ruleId,
+      find: typeof entry.find === "string" ? entry.find : entry.ruleId,
+      replacement: typeof entry.replacement === "string" ? entry.replacement : "",
+      revisionId: typeof entry.revisionId === "number" ? entry.revisionId : void 0,
+      lineNumber: typeof entry.lineNumber === "number" ? entry.lineNumber : void 0,
+      matched: typeof entry.matched === "string" ? entry.matched : void 0,
+      before: typeof entry.before === "string" ? entry.before : void 0,
+      after: typeof entry.after === "string" ? entry.after : void 0,
+      contextHash: typeof entry.contextHash === "string" ? entry.contextHash : void 0,
+      reason: typeof entry.reason === "string" ? entry.reason : void 0,
+      createdAt: typeof entry.createdAt === "string" ? entry.createdAt : "",
+      pending: entry.pending === true
+    };
+  }
   var ExclusionStore = class {
     constructor() {
       this.values = new Map(this.read().map((entry) => [entry.key, entry]));
@@ -246,27 +338,10 @@
             const [pageIdText, ruleId = "unknown"] = item.split(":", 2);
             const pageId = Number(pageIdText);
             if (!Number.isInteger(pageId)) return [];
-            return [{
-              key: item,
-              pageId,
-              title: `Page ${pageId}`,
-              ruleId,
-              find: ruleId,
-              replacement: "",
-              createdAt: ""
-            }];
+            return [{ key: item, scope: "page", pageId, title: `Page ${pageId}`, ruleId, find: ruleId, replacement: "", createdAt: "", pending: false }];
           }
-          if (!item || typeof item !== "object") return [];
-          const entry = item;
-          return typeof entry.key === "string" && typeof entry.pageId === "number" && typeof entry.ruleId === "string" && typeof entry.title === "string" ? [{
-            key: entry.key,
-            pageId: entry.pageId,
-            title: entry.title,
-            ruleId: entry.ruleId,
-            find: typeof entry.find === "string" ? entry.find : entry.ruleId,
-            replacement: typeof entry.replacement === "string" ? entry.replacement : "",
-            createdAt: typeof entry.createdAt === "string" ? entry.createdAt : ""
-          }] : [];
+          const entry = validEntry(item);
+          return entry ? [entry] : [];
         });
       } catch {
         return [];
@@ -274,33 +349,57 @@
     }
     write() {
       const raw = JSON.stringify(this.list());
-      if (mw.storage) {
-        mw.storage.set(EXCLUSIONS_KEY, raw);
-      } else {
-        localStorage.setItem(EXCLUSIONS_KEY, raw);
-      }
+      if (mw.storage) mw.storage.set(EXCLUSIONS_KEY, raw);
+      else localStorage.setItem(EXCLUSIONS_KEY, raw);
     }
-    key(pageId, ruleId) {
-      return `${pageId}:${ruleId}`;
-    }
-    has(pageId, ruleId) {
-      return this.values.has(this.key(pageId, ruleId));
-    }
-    add(candidate) {
-      const key = this.key(candidate.pageId, candidate.rule.id);
-      this.values.set(key, {
+    addOccurrence(candidate, snapshot, occurrence, reason = "") {
+      const anchor = occurrenceAnchor(occurrence);
+      const key = `${candidate.pageId}:${candidate.rule.id}:${anchor.contextHash}`;
+      const entry = {
         key,
+        scope: "occurrence",
         pageId: candidate.pageId,
         title: candidate.title,
         ruleId: candidate.rule.id,
         find: candidate.rule.find,
         replacement: candidate.rule.replace,
-        createdAt: (/* @__PURE__ */ new Date()).toISOString()
-      });
+        revisionId: snapshot.revisionId,
+        lineNumber: occurrenceLine(snapshot.text, occurrence),
+        matched: occurrence.matched,
+        before: anchor.before,
+        after: anchor.after,
+        contextHash: anchor.contextHash,
+        reason,
+        createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+        pending: true
+      };
+      this.values.set(key, entry);
       this.write();
+      return entry;
+    }
+    filter(candidate, snapshot, occurrences, community = []) {
+      const exclusions = [...this.values.values(), ...community];
+      return occurrences.filter((occurrence) => !exclusions.some((entry) => {
+        if (entry.scope === "page") return exclusionMatches(entry, candidate, snapshot, occurrence);
+        const matches = occurrences.filter((item) => exclusionMatches(entry, candidate, snapshot, item));
+        return matches.length === 1 && matches[0]?.id === occurrence.id;
+      }));
+    }
+    hasPageRule(pageId, ruleId) {
+      return [...this.values.values()].some((entry) => entry.scope === "page" && entry.pageId === pageId && entry.ruleId === ruleId);
     }
     list() {
       return [...this.values.values()].sort((left, right) => left.title.localeCompare(right.title));
+    }
+    pending() {
+      return this.list().filter((entry) => entry.pending && entry.scope === "occurrence");
+    }
+    markPublished(keys) {
+      for (const key of keys) {
+        const entry = this.values.get(key);
+        if (entry) entry.pending = false;
+      }
+      this.write();
     }
     remove(key) {
       this.values.delete(key);
@@ -311,6 +410,38 @@
       this.write();
     }
   };
+
+  // src/state/community.ts
+  var OPEN = '<syntaxhighlight lang="json">';
+  var CLOSE = "</syntaxhighlight>";
+  function isEntry(value) {
+    if (!value || typeof value !== "object") return false;
+    const entry = value;
+    return typeof entry.key === "string" && (entry.scope === "page" || entry.scope === "occurrence") && typeof entry.pageId === "number" && typeof entry.title === "string" && typeof entry.ruleId === "string" && typeof entry.find === "string" && typeof entry.replacement === "string";
+  }
+  function parseCommunityExclusions(wikitext) {
+    if (!wikitext.trim()) return [];
+    const start = wikitext.indexOf(OPEN);
+    const end = wikitext.indexOf(CLOSE, start + OPEN.length);
+    if (start < 0 || end < 0) throw new Error("The community exclusions page does not contain a TypoSpotter JSON block.");
+    const document2 = JSON.parse(wikitext.slice(start + OPEN.length, end).trim());
+    if (document2.version !== 1 || !Array.isArray(document2.exclusions)) {
+      throw new Error("The community exclusions page uses an unsupported format.");
+    }
+    return document2.exclusions.filter(isEntry).map((entry) => ({ ...entry, pending: false }));
+  }
+  function serializeCommunityExclusions(entries) {
+    const document2 = {
+      version: 1,
+      exclusions: [...new Map(entries.map((entry) => [entry.key, { ...entry, pending: false }])).values()].sort((left, right) => left.title.localeCompare(right.title) || left.key.localeCompare(right.key))
+    };
+    const json = JSON.stringify(document2, null, 2).replaceAll("<", "\\u003c").replaceAll(">", "\\u003e").replaceAll("&", "\\u0026");
+    return `<!-- This data is maintained by TypoSpotter. Review changes in the page history. -->
+${OPEN}
+${json}
+${CLOSE}
+`;
+  }
 
   // src/ui/styles.ts
   var STYLES = `
@@ -461,7 +592,7 @@ body.ts-active > :not(#ts-host) {
 .ts-occurrence-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: .3rem; }
 .ts-occurrence {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr) auto;
   gap: .65rem;
   align-items: start;
   padding: .35rem .5rem;
@@ -469,6 +600,7 @@ body.ts-active > :not(#ts-host) {
   background: var(--ts-bg);
 }
 .ts-occurrence input { margin-top: .22rem; }
+.ts-occurrence-exclude { align-self: start; white-space: nowrap; }
 .ts-context { font-family: monospace; font-size: .84rem; line-height: 1.45; overflow-wrap: anywhere; }
 .ts-context-before, .ts-context-after { color: var(--ts-muted); }
 .ts-context-find { color: var(--ts-danger); text-decoration: line-through; background: rgba(179, 36, 36, .08); }
@@ -537,7 +669,7 @@ body.ts-active > :not(#ts-host) {
 .ts-exclusion-row { display: flex; justify-content: space-between; gap: .75rem; align-items: center; padding: .65rem 0; border-bottom: 1px solid var(--ts-border-subtle); }
 .ts-exclusion-title { font-weight: 600; }
 .ts-exclusion-rule, .ts-exclusions-empty { color: var(--ts-muted); font-size: .8rem; }
-.ts-exclusions-footer { flex: 0 0 auto; padding-top: .8rem; }
+.ts-exclusions-footer { display: flex; justify-content: space-between; gap: .6rem; flex: 0 0 auto; padding-top: .8rem; }
 
 @media (max-width: 850px) {
   .ts-layout { grid-template-columns: 1fr; }
@@ -595,14 +727,16 @@ body.ts-active > :not(#ts-host) {
       this.editButton = element("button", "ts-button ts-button-quiet");
       this.resetButton = element("button", "ts-button ts-button-quiet");
       this.skipButton = element("button", "ts-button");
-      this.excludeButton = element("button", "ts-button ts-button-quiet ts-button-danger");
       this.exclusionsButton = element("button", "ts-button ts-button-quiet");
+      this.publishExclusionsButton = element("button", "ts-button ts-button-primary");
       this.exclusionsPanel = element("section", "ts-exclusions-panel");
       this.exclusionsList = element("div", "ts-exclusions-list");
       this.saveButton = element("button", "ts-button ts-button-primary");
       this.diffPanel = element("section", "ts-panel ts-diff-panel");
       this.editorPanel = element("section", "ts-panel ts-editor-panel");
       this.statsNodes = /* @__PURE__ */ new Map();
+      this.currentOccurrenceIds = [];
+      this.pendingExclusionCount = 0;
       this.root.id = "ts-root";
       const style = element("style");
       style.textContent = STYLES;
@@ -680,7 +814,10 @@ body.ts-active > :not(#ts-host) {
       clear.type = "button";
       clear.textContent = "Clear all";
       clear.addEventListener("click", () => this.actions?.onClearExclusions());
-      footer.append(clear);
+      this.publishExclusionsButton.type = "button";
+      this.publishExclusionsButton.textContent = "Publish pending";
+      this.publishExclusionsButton.addEventListener("click", () => this.actions?.onPublishExclusions());
+      footer.append(clear, this.publishExclusionsButton);
       this.exclusionsPanel.append(header, description, this.exclusionsList, footer);
     }
     openExclusions() {
@@ -739,9 +876,6 @@ body.ts-active > :not(#ts-host) {
       this.skipButton.type = "button";
       this.skipButton.textContent = "Skip  S";
       this.skipButton.addEventListener("click", () => this.actions?.onSkip());
-      this.excludeButton.type = "button";
-      this.excludeButton.textContent = "Not a typo  X";
-      this.excludeButton.addEventListener("click", () => this.actions?.onExclude());
       this.editButton.type = "button";
       this.editButton.textContent = "Edit wikitext  E";
       this.editButton.addEventListener("click", () => this.toggleEditor());
@@ -749,7 +883,7 @@ body.ts-active > :not(#ts-host) {
       this.saveButton.type = "button";
       this.saveButton.textContent = "Save and next  A";
       this.saveButton.addEventListener("click", () => this.actions?.onSave(this.summary.value));
-      actions.append(this.skipButton, this.excludeButton, this.editButton, spacer, this.saveButton);
+      actions.append(this.skipButton, this.editButton, spacer, this.saveButton);
       const workspace = element("div", "ts-workspace");
       workspace.append(this.diffPanel, this.editorPanel);
       this.review.append(header, this.rulebar, occurrences, workspace, summaryRow, actions);
@@ -762,7 +896,10 @@ body.ts-active > :not(#ts-host) {
       const shortcuts = {
         a: () => this.actions?.onSave(this.summary.value),
         s: () => this.actions?.onSkip(),
-        x: () => this.actions?.onExclude(),
+        x: () => {
+          if (this.currentOccurrenceIds.length === 1) this.excludeOccurrence(this.currentOccurrenceIds[0]);
+          else this.setStatus("Choose Not a typo beside the specific occurrence.");
+        },
         r: () => this.actions?.onRefreshDiff(),
         e: () => this.toggleEditor()
       };
@@ -821,8 +958,14 @@ body.ts-active > :not(#ts-host) {
         if (node) node.textContent = String(stats[key]);
       });
     }
-    renderExclusions(entries) {
+    renderExclusions(entries, sharedCount = 0) {
       this.exclusionsButton.textContent = `Not typos (${entries.length})`;
+      const pendingCount = entries.filter((entry) => entry.pending).length;
+      this.pendingExclusionCount = pendingCount;
+      this.publishExclusionsButton.disabled = pendingCount === 0;
+      this.publishExclusionsButton.textContent = pendingCount > 0 ? `Publish pending (${pendingCount})` : "Publish pending";
+      const description = this.exclusionsPanel.querySelector(".ts-exclusions-description");
+      if (description) description.textContent = `${sharedCount} shared exclusions loaded. Local exclusions stay in this browser until published.`;
       this.exclusionsList.replaceChildren();
       if (entries.length === 0) {
         const empty = element("p", "ts-exclusions-empty");
@@ -836,7 +979,9 @@ body.ts-active > :not(#ts-host) {
         const title = element("div", "ts-exclusion-title");
         title.textContent = entry.title;
         const rule = element("div", "ts-exclusion-rule");
-        rule.textContent = entry.replacement ? `${entry.find} \u2192 ${entry.replacement}` : entry.find;
+        const location = entry.lineNumber ? ` \xB7 original line ${entry.lineNumber}` : "";
+        const pending = entry.pending ? " \xB7 pending" : "";
+        rule.textContent = `${entry.replacement ? `${entry.find} \u2192 ${entry.replacement}` : entry.find}${location}${pending}`;
         details.append(title, rule);
         const remove = element("button", "ts-button ts-button-quiet ts-button-danger");
         remove.type = "button";
@@ -874,6 +1019,7 @@ body.ts-active > :not(#ts-host) {
     }
     renderOccurrences(proposal) {
       this.occurrenceList.replaceChildren();
+      this.currentOccurrenceIds = proposal.occurrences.map((occurrence) => occurrence.id);
       for (const occurrence of proposal.occurrences) {
         const label = element("label", "ts-occurrence");
         const checkbox = element("input");
@@ -892,10 +1038,23 @@ body.ts-active > :not(#ts-host) {
         const after = element("span", "ts-context-after");
         after.textContent = occurrence.after;
         context.append(before, found, separator, replaced, after);
-        label.append(checkbox, context);
+        const exclude = element("button", "ts-button ts-button-quiet ts-button-danger ts-occurrence-exclude");
+        exclude.type = "button";
+        exclude.textContent = "Not a typo";
+        exclude.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          this.excludeOccurrence(occurrence.id);
+        });
+        label.append(checkbox, context, exclude);
         this.occurrenceList.append(label);
       }
       this.occurrenceHelp.textContent = proposal.manuallyEdited ? "Occurrence controls are paused because the proposed wikitext was edited manually. Reset to use them again." : "Uncheck any occurrence that should remain unchanged, then refresh the diff.";
+    }
+    excludeOccurrence(id) {
+      const reason = window.prompt("Why should this occurrence remain unchanged?", "Direct quotation");
+      if (reason === null) return;
+      this.actions?.onExcludeOccurrence(id, reason.trim().slice(0, 200));
     }
     setEditorText(text) {
       if (this.editor.value !== text) this.editor.value = text;
@@ -960,10 +1119,13 @@ body.ts-active > :not(#ts-host) {
       this.refreshButton.disabled = busy;
       this.resetButton.disabled = busy;
       this.skipButton.disabled = busy;
-      this.excludeButton.disabled = busy;
       this.editButton.disabled = busy;
       this.editor.disabled = busy;
       this.summary.disabled = busy;
+      this.publishExclusionsButton.disabled = busy || this.pendingExclusionCount === 0;
+      this.occurrenceList.querySelectorAll(".ts-occurrence-exclude").forEach((button) => {
+        button.disabled = busy;
+      });
       if (busy) this.saveButton.disabled = true;
     }
     setSaveEnabled(enabled) {
@@ -1124,6 +1286,7 @@ body.ts-active > :not(#ts-host) {
       this.nextRuleIndex = 0;
       this.busy = false;
       this.loadedCount = 0;
+      this.communityExclusions = [];
       this.view = new TypoSpotterView(container);
       this.view.setActions({
         onOccurrenceChange: (id, selected) => this.changeOccurrence(id, selected),
@@ -1131,9 +1294,10 @@ body.ts-active > :not(#ts-host) {
         onRefreshDiff: () => void this.refreshDiff(),
         onResetProposal: () => this.resetProposal(),
         onSkip: () => void this.skip(),
-        onExclude: () => void this.exclude(),
+        onExcludeOccurrence: (id, reason) => void this.excludeOccurrence(id, reason),
         onRemoveExclusion: (key) => this.removeExclusion(key),
         onClearExclusions: () => this.clearExclusions(),
+        onPublishExclusions: () => void this.publishExclusions(),
         onSave: (summary) => void this.save(summary),
         onQueueSelect: (candidate) => void this.selectCandidate(candidate)
       });
@@ -1149,6 +1313,7 @@ body.ts-active > :not(#ts-host) {
       this.view.renderQueue(void 0, []);
       this.view.setStatus("Searching English Wikipedia for a small set of likely typos\u2026");
       try {
+        await this.loadCommunityExclusions();
         await this.refillQueue(1);
         await this.advance();
       } catch (error) {
@@ -1158,6 +1323,15 @@ body.ts-active > :not(#ts-host) {
     }
     candidateKey(candidate) {
       return `${candidate.pageId}:${candidate.rule.id}`;
+    }
+    async loadCommunityExclusions() {
+      try {
+        const snapshot = await this.api.loadPageByTitle(COMMUNITY_EXCLUSIONS_PAGE);
+        this.communityExclusions = parseCommunityExclusions(snapshot.text);
+      } catch {
+        this.communityExclusions = [];
+      }
+      this.view.renderExclusions(this.exclusions.list(), this.communityExclusions.length);
     }
     async refillQueue(target = QUEUE_TARGET) {
       if (this.queue.length >= target) return;
@@ -1198,7 +1372,7 @@ body.ts-active > :not(#ts-host) {
           }
           for (const candidate of result.value.candidates) {
             const key = this.candidateKey(candidate);
-            if (isIgnoredTitle(candidate.title) || this.seen.has(key) || this.exclusions.has(candidate.pageId, candidate.rule.id)) continue;
+            if (isIgnoredTitle(candidate.title) || this.seen.has(key) || this.exclusions.hasPageRule(candidate.pageId, candidate.rule.id) || this.communityExclusions.some((entry) => entry.scope === "page" && entry.pageId === candidate.pageId && entry.ruleId === candidate.rule.id)) continue;
             this.seen.add(key);
             candidates.push(candidate);
           }
@@ -1213,7 +1387,12 @@ body.ts-active > :not(#ts-host) {
             if (!candidate) return;
             try {
               const snapshot = await this.api.loadPage(candidate);
-              const occurrences = findOccurrences(snapshot.text, candidate.rule);
+              const occurrences = this.exclusions.filter(
+                candidate,
+                snapshot,
+                findOccurrences(snapshot.text, candidate.rule),
+                this.communityExclusions
+              );
               if (occurrences.length === 0) continue;
               this.queue.push({ candidate, snapshot, occurrences });
               this.view.renderQueue(this.current?.candidate, this.queue.map((item) => item.candidate));
@@ -1345,22 +1524,61 @@ body.ts-active > :not(#ts-host) {
       this.view.renderStats(this.stats);
       await this.advance();
     }
-    async exclude() {
+    async excludeOccurrence(id, reason) {
       if (this.busy || !this.proposal) return;
-      this.exclusions.add(this.proposal.candidate);
-      this.view.renderExclusions(this.exclusions.list());
-      this.stats.reviewed += 1;
-      this.stats.skipped += 1;
-      this.view.renderStats(this.stats);
-      await this.advance();
+      const occurrence = this.proposal.occurrences.find((item) => item.id === id);
+      if (!occurrence) return;
+      this.exclusions.addOccurrence(this.proposal.candidate, this.proposal.snapshot, occurrence, reason);
+      this.view.renderExclusions(this.exclusions.list(), this.communityExclusions.length);
+      this.proposal.occurrences = this.proposal.occurrences.filter((item) => item.id !== id);
+      this.proposal.selected.delete(id);
+      if (this.proposal.occurrences.length === 0) {
+        this.stats.reviewed += 1;
+        this.stats.skipped += 1;
+        this.view.renderStats(this.stats);
+        await this.advance();
+        return;
+      }
+      this.proposal.text = applyOccurrences(this.proposal.snapshot.text, this.proposal.occurrences, this.proposal.selected);
+      this.view.renderOccurrences(this.proposal);
+      this.view.setEditorText(this.proposal.text);
+      this.diffText = void 0;
+      await this.refreshDiff();
     }
     removeExclusion(key) {
       this.exclusions.remove(key);
-      this.view.renderExclusions(this.exclusions.list());
+      this.view.renderExclusions(this.exclusions.list(), this.communityExclusions.length);
     }
     clearExclusions() {
       this.exclusions.clear();
-      this.view.renderExclusions([]);
+      this.view.renderExclusions([], this.communityExclusions.length);
+    }
+    async publishExclusions() {
+      if (this.busy) return;
+      const pending = this.exclusions.pending();
+      if (pending.length === 0) return;
+      this.busy = true;
+      this.view.setBusy(true);
+      this.view.setStatus(`Publishing ${pending.length} shared exclusion${pending.length === 1 ? "" : "s"}\u2026`);
+      try {
+        const snapshot = await this.api.loadPageByTitle(COMMUNITY_EXCLUSIONS_PAGE);
+        const existing = parseCommunityExclusions(snapshot.text);
+        const merged = [...new Map([...existing, ...pending].map((entry) => [entry.key, entry])).values()];
+        await this.api.edit(
+          snapshot,
+          serializeCommunityExclusions(merged),
+          `Add ${pending.length} TypoSpotter exclusion${pending.length === 1 ? "" : "s"} ([[${ABOUT_PAGE}|TS v${VERSION}]])`
+        );
+        this.exclusions.markPublished(new Set(pending.map((entry) => entry.key)));
+        this.communityExclusions = merged.map((entry) => ({ ...entry, pending: false }));
+        this.view.renderExclusions(this.exclusions.list(), this.communityExclusions.length);
+        this.view.setStatus("Shared exclusions published.", "success");
+      } catch (error) {
+        this.view.setStatus(errorMessage(error), "error");
+      } finally {
+        this.busy = false;
+        this.view.setBusy(false);
+      }
     }
     async save(summary) {
       if (!this.proposal || this.busy) return;
@@ -1394,7 +1612,7 @@ body.ts-active > :not(#ts-host) {
           const candidate = this.current.candidate;
           try {
             const snapshot = await this.api.loadPage(candidate);
-            const occurrences = findOccurrences(snapshot.text, candidate.rule);
+            const occurrences = this.exclusions.filter(candidate, snapshot, findOccurrences(snapshot.text, candidate.rule), this.communityExclusions);
             if (occurrences.length > 0) this.queue.unshift({ candidate, snapshot, occurrences });
           } catch {
           }

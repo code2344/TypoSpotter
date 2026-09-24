@@ -116,6 +116,41 @@ export class MediaWikiApi {
     }
   }
 
+  async loadPageByTitle(title: string): Promise<PageSnapshot> {
+    try {
+      const response = await this.api.get({
+        action: "query",
+        titles: title,
+        prop: "info|revisions",
+        intestactions: "edit",
+        intestactionsdetail: "boolean",
+        rvprop: "ids|timestamp|content|contentmodel",
+        rvslots: "main",
+        curtimestamp: 1,
+        format: "json",
+        formatversion: 2,
+        maxlag: 5
+      });
+      const page = response.query?.pages?.[0];
+      const revision = page?.revisions?.[0];
+      const slot = revision?.slots?.main;
+      if (!page || page.missing || !revision || typeof slot?.content !== "string") {
+        throw new TypoSpotterApiError(`${title} must exist before shared exclusions can be used.`, "missingcontent");
+      }
+      return {
+        pageId: page.pageid,
+        title: page.title,
+        revisionId: revision.revid,
+        baseTimestamp: revision.timestamp,
+        startTimestamp: response.curtimestamp,
+        contentModel: slot.contentmodel || "wikitext",
+        text: slot.content
+      };
+    } catch (error) {
+      throw normalizeError(error);
+    }
+  }
+
   async edit(snapshot: PageSnapshot, text: string, summary: string): Promise<number> {
     try {
       const response = await this.api.postWithEditToken({

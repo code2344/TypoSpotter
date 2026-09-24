@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { EXCLUSIONS_KEY } from "../src/config";
 import { ExclusionStore } from "../src/state/exclusions";
-import type { Candidate } from "../src/types";
+import type { Candidate, Occurrence, PageSnapshot } from "../src/types";
 
 const values = new Map<string, string>();
 
@@ -27,23 +27,50 @@ describe("ExclusionStore", () => {
       rule: { id: "recieve", find: "recieve", replace: "receive", note: "test" }
     };
 
-    store.add(candidate);
+    const text = "The archived letter says I did not recieve it.";
+    const start = text.indexOf("recieve");
+    const occurrence: Occurrence = {
+      id: "recieve:35", start, end: start + 7, matched: "recieve", replacement: "receive",
+      before: text.slice(0, start), after: text.slice(start + 7)
+    };
+    const snapshot: PageSnapshot = {
+      pageId: 42, title: candidate.title, revisionId: 100, baseTimestamp: "", startTimestamp: "",
+      contentModel: "wikitext", text
+    };
 
-    expect(store.has(42, "recieve")).toBe(true);
+    store.addOccurrence(candidate, snapshot, occurrence, "Direct quotation");
+
     expect(store.list()).toMatchObject([{
-      key: "42:recieve",
+      scope: "occurrence",
       pageId: 42,
       title: "Quoted example",
       find: "recieve",
-      replacement: "receive"
+      replacement: "receive",
+      revisionId: 100,
+      lineNumber: 1,
+      reason: "Direct quotation",
+      pending: true
     }]);
+    expect(store.filter(candidate, snapshot, [occurrence])).toEqual([]);
+
+    const movedSnapshot = { ...snapshot, revisionId: 101, text: `New heading\n${text}` };
+    const movedOccurrence = {
+      ...occurrence,
+      id: "recieve:47",
+      start: occurrence.start + 12,
+      end: occurrence.end + 12
+    };
+    expect(store.filter(candidate, movedSnapshot, [movedOccurrence])).toEqual([]);
+
+    const ambiguous = { ...movedOccurrence, id: "recieve:99", start: 99, end: 106 };
+    expect(store.filter(candidate, movedSnapshot, [movedOccurrence, ambiguous])).toHaveLength(2);
   });
 
   it("migrates legacy keys and allows removal", () => {
     values.set(EXCLUSIONS_KEY, JSON.stringify(["73:occured"]));
     const store = new ExclusionStore();
 
-    expect(store.has(73, "occured")).toBe(true);
+    expect(store.hasPageRule(73, "occured")).toBe(true);
     store.remove("73:occured");
     expect(store.list()).toEqual([]);
   });

@@ -1,9 +1,10 @@
 import { MediaWikiApi, TypoSpotterApiError } from "./api/mediawiki";
-import { editSummary, isIgnoredTitle, QUEUE_TARGET } from "./config";
+import { ABOUT_PAGE, COMMUNITY_EXCLUSIONS_PAGE, editSummary, isIgnoredTitle, QUEUE_TARGET, VERSION } from "./config";
 import { buildLocalDiff } from "./diff/local";
 import { RULES } from "./rules/catalog";
 import { ExclusionStore } from "./state/exclusions";
-import type { Candidate, PreparedCandidate, Proposal, SessionStats } from "./types";
+import { parseCommunityExclusions, serializeCommunityExclusions } from "./state/community";
+import type { Candidate, ExclusionEntry, PreparedCandidate, Proposal, SessionStats } from "./types";
 import { TypoSpotterView } from "./ui/view";
 import { applyOccurrences } from "./wikitext/proposal";
 import { findOccurrences } from "./wikitext/scanner";
@@ -45,6 +46,7 @@ export class TypoSpotterApp {
   private diffText?: string;
   private loadedCount = 0;
   private refillPromise?: Promise<void>;
+  private communityExclusions: ExclusionEntry[] = [];
 
   constructor(container: HTMLElement) {
     this.view = new TypoSpotterView(container);
@@ -54,9 +56,10 @@ export class TypoSpotterApp {
       onRefreshDiff: () => void this.refreshDiff(),
       onResetProposal: () => this.resetProposal(),
       onSkip: () => void this.skip(),
-      onExclude: () => void this.exclude(),
+      onExcludeOccurrence: (id, reason) => void this.excludeOccurrence(id, reason),
       onRemoveExclusion: (key) => this.removeExclusion(key),
       onClearExclusions: () => this.clearExclusions(),
+      onPublishExclusions: () => void this.publishExclusions(),
       onSave: (summary) => void this.save(summary),
       onQueueSelect: (candidate) => void this.selectCandidate(candidate)
     });
@@ -74,6 +77,7 @@ export class TypoSpotterApp {
     this.view.renderQueue(undefined, []);
     this.view.setStatus("Searching English Wikipedia for a small set of likely typos…");
     try {
+      await this.loadCommunityExclusions();
       await this.refillQueue(1);
       await this.advance();
     } catch (error) {
@@ -84,6 +88,16 @@ export class TypoSpotterApp {
 
   private candidateKey(candidate: Candidate): string {
     return `${candidate.pageId}:${candidate.rule.id}`;
+  }
+
+  private async loadCommunityExclusions(): Promise<void> {
+    try {
+      const snapshot = await this.api.loadPageByTitle(COMMUNITY_EXCLUSIONS_PAGE);
+      this.communityExclusions = parseCommunityExclusions(snapshot.text);
+    } catch {
+      this.communityExclusions = [];
+    }
+    this.view.renderExclusions(this.exclusions.list(), this.communityExclusions.length);
   }
 
   private async refillQueue(target = QUEUE_TARGET): Promise<void> {
@@ -133,7 +147,8 @@ export class TypoSpotterApp {
           if (
             isIgnoredTitle(candidate.title) ||
             this.seen.has(key) ||
-            this.exclusions.has(candidate.pageId, candidate.rule.id)
+            this.exclusions.hasPageRule(candidate.pageId, candidate.rule.id) ||
+            this.communityExclusions.some((entry) => entry.scope === "page" && entry.pageId === candidate.pageId && entry.ruleId === candidate.rule.id)
           ) continue;
           this.seen.add(key);
           candidates.push(candidate);
@@ -151,7 +166,12 @@ export class TypoSpotterApp {
           if (!candidate) return;
           try {
             const snapshot = await this.api.loadPage(candidate);
-            const occurrences = findOccurrences(snapshot.text, candidate.rule);
+            const occurrences = this.exclusions.filter(
+              candidate,
+              snapshot,
+              findOccurrences(snapshot.text, candidate.rule),
+              this.communityExclusions
+            );
             if (occurrences.length === 0) continue;
             this.queue.push({ candidate, snapshot, occurrences });
             this.view.renderQueue(this.current?.candidate, this.queue.map((item) => item.candidate));
@@ -298,24 +318,64 @@ export class TypoSpotterApp {
     await this.advance();
   }
 
-  private async exclude(): Promise<void> {
+  private async excludeOccurrence(id: string, reason: string): Promise<void> {
     if (this.busy || !this.proposal) return;
-    this.exclusions.add(this.proposal.candidate);
-    this.view.renderExclusions(this.exclusions.list());
-    this.stats.reviewed += 1;
-    this.stats.skipped += 1;
-    this.view.renderStats(this.stats);
-    await this.advance();
+    const occurrence = this.proposal.occurrences.find((item) => item.id === id);
+    if (!occurrence) return;
+    this.exclusions.addOccurrence(this.proposal.candidate, this.proposal.snapshot, occurrence, reason);
+    this.view.renderExclusions(this.exclusions.list(), this.communityExclusions.length);
+    this.proposal.occurrences = this.proposal.occurrences.filter((item) => item.id !== id);
+    this.proposal.selected.delete(id);
+    if (this.proposal.occurrences.length === 0) {
+      this.stats.reviewed += 1;
+      this.stats.skipped += 1;
+      this.view.renderStats(this.stats);
+      await this.advance();
+      return;
+    }
+    this.proposal.text = applyOccurrences(this.proposal.snapshot.text, this.proposal.occurrences, this.proposal.selected);
+    this.view.renderOccurrences(this.proposal);
+    this.view.setEditorText(this.proposal.text);
+    this.diffText = undefined;
+    await this.refreshDiff();
   }
 
   private removeExclusion(key: string): void {
     this.exclusions.remove(key);
-    this.view.renderExclusions(this.exclusions.list());
+    this.view.renderExclusions(this.exclusions.list(), this.communityExclusions.length);
   }
 
   private clearExclusions(): void {
     this.exclusions.clear();
-    this.view.renderExclusions([]);
+    this.view.renderExclusions([], this.communityExclusions.length);
+  }
+
+  private async publishExclusions(): Promise<void> {
+    if (this.busy) return;
+    const pending = this.exclusions.pending();
+    if (pending.length === 0) return;
+    this.busy = true;
+    this.view.setBusy(true);
+    this.view.setStatus(`Publishing ${pending.length} shared exclusion${pending.length === 1 ? "" : "s"}…`);
+    try {
+      const snapshot = await this.api.loadPageByTitle(COMMUNITY_EXCLUSIONS_PAGE);
+      const existing = parseCommunityExclusions(snapshot.text);
+      const merged = [...new Map([...existing, ...pending].map((entry) => [entry.key, entry])).values()];
+      await this.api.edit(
+        snapshot,
+        serializeCommunityExclusions(merged),
+        `Add ${pending.length} TypoSpotter exclusion${pending.length === 1 ? "" : "s"} ([[${ABOUT_PAGE}|TS v${VERSION}]])`
+      );
+      this.exclusions.markPublished(new Set(pending.map((entry) => entry.key)));
+      this.communityExclusions = merged.map((entry) => ({ ...entry, pending: false }));
+      this.view.renderExclusions(this.exclusions.list(), this.communityExclusions.length);
+      this.view.setStatus("Shared exclusions published.", "success");
+    } catch (error) {
+      this.view.setStatus(errorMessage(error), "error");
+    } finally {
+      this.busy = false;
+      this.view.setBusy(false);
+    }
   }
 
   private async save(summary: string): Promise<void> {
@@ -351,7 +411,7 @@ export class TypoSpotterApp {
         const candidate = this.current.candidate;
         try {
           const snapshot = await this.api.loadPage(candidate);
-          const occurrences = findOccurrences(snapshot.text, candidate.rule);
+          const occurrences = this.exclusions.filter(candidate, snapshot, findOccurrences(snapshot.text, candidate.rule), this.communityExclusions);
           if (occurrences.length > 0) this.queue.unshift({ candidate, snapshot, occurrences });
         } catch {
           // If the new revision is no longer reviewable, continue with the queue.

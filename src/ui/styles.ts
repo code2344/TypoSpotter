@@ -146,7 +146,7 @@ body.ts-active > :not(#ts-host) {
 .ts-occurrence-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: .3rem; }
 .ts-occurrence {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr) auto;
   gap: .65rem;
   align-items: start;
   padding: .35rem .5rem;
@@ -154,6 +154,7 @@ body.ts-active > :not(#ts-host) {
   background: var(--ts-bg);
 }
 .ts-occurrence input { margin-top: .22rem; }
+.ts-occurrence-exclude { align-self: start; white-space: nowrap; }
 .ts-context { font-family: monospace; font-size: .84rem; line-height: 1.45; overflow-wrap: anywhere; }
 .ts-context-before, .ts-context-after { color: var(--ts-muted); }
 .ts-context-find { color: var(--ts-danger); text-decoration: line-through; background: rgba(179, 36, 36, .08); }
@@ -222,7 +223,7 @@ body.ts-active > :not(#ts-host) {
 .ts-exclusion-row { display: flex; justify-content: space-between; gap: .75rem; align-items: center; padding: .65rem 0; border-bottom: 1px solid var(--ts-border-subtle); }
 .ts-exclusion-title { font-weight: 600; }
 .ts-exclusion-rule, .ts-exclusions-empty { color: var(--ts-muted); font-size: .8rem; }
-.ts-exclusions-footer { flex: 0 0 auto; padding-top: .8rem; }
+.ts-exclusions-footer { display: flex; justify-content: space-between; gap: .6rem; flex: 0 0 auto; padding-top: .8rem; }
 
 @media (max-width: 850px) {
   .ts-layout { grid-template-columns: 1fr; }
