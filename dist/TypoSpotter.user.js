@@ -1,5 +1,5 @@
 // <nowiki>
-// TypoSpotter v0.1.3
+// TypoSpotter v0.2.0
 // Source: https://github.com/code2344/TypoSpotter
 "use strict";
 (() => {
@@ -134,7 +134,7 @@
   };
 
   // src/config.ts
-  var VERSION = "0.1.3";
+  var VERSION = "0.2.0";
   var RUN_PAGE = "User:SuperCode111/TypoSpotter/run";
   var ABOUT_PAGE = "User:SuperCode111/TypoSpotter";
   var EXCLUSIONS_KEY = "TypoSpotter-exclusions-v1";

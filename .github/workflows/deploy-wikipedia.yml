@@ -1,0 +1,61 @@
+name: Deploy to English Wikipedia
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-english-wikipedia
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: wikipedia-production
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate source
+        run: npm run check
+
+      - name: Build userscript
+        run: npm run build
+
+      - name: Verify committed deployment files
+        run: git diff --exit-code -- dist/TypoSpotter.user.js dist/common-loader.js
+
+      - name: Check deployment credentials
+        id: credentials
+        env:
+          WIKIPEDIA_BOT_USERNAME: ${{ secrets.WIKIPEDIA_BOT_USERNAME }}
+          WIKIPEDIA_BOT_PASSWORD: ${{ secrets.WIKIPEDIA_BOT_PASSWORD }}
+        run: |
+          if [ -z "$WIKIPEDIA_BOT_USERNAME" ] || [ -z "$WIKIPEDIA_BOT_PASSWORD" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Deployment skipped. Configure WIKIPEDIA_BOT_USERNAME and WIKIPEDIA_BOT_PASSWORD in the wikipedia-production environment."
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Deploy userscript
+        if: steps.credentials.outputs.configured == 'true'
+        env:
+          WIKIPEDIA_BOT_USERNAME: ${{ secrets.WIKIPEDIA_BOT_USERNAME }}
+          WIKIPEDIA_BOT_PASSWORD: ${{ secrets.WIKIPEDIA_BOT_PASSWORD }}
+          GITHUB_SHA: ${{ github.sha }}
+        run: node scripts/deploy-wikipedia.mjs
