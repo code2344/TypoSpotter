@@ -1,0 +1,303 @@
+import { MediaWikiApi, TypoSpotterApiError } from "./api/mediawiki";
+import { editSummary, isIgnoredTitle, QUEUE_TARGET } from "./config";
+import { buildLocalDiff } from "./diff/local";
+import { RULES } from "./rules/catalog";
+import { ExclusionStore } from "./state/exclusions";
+import type { Candidate, Proposal, SessionStats } from "./types";
+import { TypoSpotterView } from "./ui/view";
+import { applyOccurrences } from "./wikitext/proposal";
+import { findOccurrences } from "./wikitext/scanner";
+
+const SEARCH_RULES_PER_BATCH = 5;
+
+function errorMessage(error: unknown): string {
+  if (!(error instanceof TypoSpotterApiError)) {
+    return error instanceof Error ? error.message : "Something went wrong.";
+  }
+  const known: Record<string, string> = {
+    assertuserfailed: "Your Wikipedia session is no longer logged in. Reload after signing in.",
+    editconflict: "The article changed after this diff was prepared. TypoSpotter has reloaded it for review.",
+    protectedpage: "This page is protected and cannot be edited by this account.",
+    permissiondenied: "This account does not have permission to edit the page.",
+    ratelimited: "Wikipedia is limiting edits temporarily. The proposal has been kept so you can retry.",
+    maxlag: "Wikipedia's servers are busy. The proposal has been kept so you can retry.",
+    "abusefilter-disallowed": "An edit filter disallowed this change. Nothing was saved.",
+    spamblacklist: "The edit was rejected by the spam blacklist. Nothing was saved.",
+    captcha: "Wikipedia requires a CAPTCHA for this edit. Open the normal edit page to continue."
+  };
+  return known[error.code] || error.message;
+}
+
+export class TypoSpotterApp {
+  private readonly api = new MediaWikiApi();
+  private readonly exclusions = new ExclusionStore();
+  private readonly view: TypoSpotterView;
+  private readonly queue: Candidate[] = [];
+  private readonly seen = new Set<string>();
+  private readonly continuations = new Map<string, number>();
+  private stats: SessionStats = { reviewed: 0, saved: 0, skipped: 0, stale: 0 };
+  private proposal?: Proposal;
+  private current?: Candidate;
+  private nextRuleIndex = 0;
+  private busy = false;
+  private diffText?: string;
+  private loadedCount = 0;
+
+  constructor(container: HTMLElement) {
+    this.view = new TypoSpotterView(container);
+    this.view.setActions({
+      onOccurrenceChange: (id, selected) => this.changeOccurrence(id, selected),
+      onProposalInput: (text) => this.changeProposal(text),
+      onRefreshDiff: () => void this.refreshDiff(),
+      onResetProposal: () => this.resetProposal(),
+      onSkip: () => void this.skip(),
+      onExclude: () => void this.exclude(),
+      onSave: (summary) => void this.save(summary),
+      onQueueSelect: (candidate) => void this.selectCandidate(candidate)
+    });
+  }
+
+  async start(): Promise<void> {
+    if (!mw.config.get("wgUserName")) {
+      this.view.showEmpty("Sign in required", "TypoSpotter makes edits through your Wikipedia account. Sign in, then reload this page.");
+      this.view.setStatus("Not signed in", "error");
+      return;
+    }
+
+    this.view.renderStats(this.stats);
+    this.view.renderQueue(undefined, []);
+    this.view.setStatus("Searching English Wikipedia for a small set of likely typos…");
+    try {
+      await this.refillQueue();
+      await this.advance();
+    } catch (error) {
+      this.view.showEmpty("Could not start TypoSpotter", errorMessage(error));
+      this.view.setStatus(errorMessage(error), "error");
+    }
+  }
+
+  private candidateKey(candidate: Candidate): string {
+    return `${candidate.pageId}:${candidate.rule.id}`;
+  }
+
+  private async refillQueue(): Promise<void> {
+    if (this.queue.length >= QUEUE_TARGET) return;
+
+    const rules = Array.from({ length: SEARCH_RULES_PER_BATCH }, (_, offset) => {
+      const index = (this.nextRuleIndex + offset) % RULES.length;
+      return RULES[index];
+    }).filter((rule): rule is (typeof RULES)[number] => Boolean(rule));
+    this.nextRuleIndex = (this.nextRuleIndex + SEARCH_RULES_PER_BATCH) % RULES.length;
+
+    const batches = await Promise.allSettled(
+      rules.map((rule) => this.api.search(rule, this.continuations.get(rule.id)))
+    );
+    let successfulSearches = 0;
+    batches.forEach((result, index) => {
+      const rule = rules[index];
+      if (result.status !== "fulfilled" || !rule) return;
+      successfulSearches += 1;
+      if (result.value.continueToken !== undefined) {
+        this.continuations.set(rule.id, result.value.continueToken);
+      } else {
+        this.continuations.delete(rule.id);
+      }
+      for (const candidate of result.value.candidates) {
+        const key = this.candidateKey(candidate);
+        if (
+          isIgnoredTitle(candidate.title) ||
+          this.seen.has(key) ||
+          this.exclusions.has(candidate.pageId, candidate.rule.id)
+        ) continue;
+        this.seen.add(key);
+        this.queue.push(candidate);
+      }
+    });
+
+    if (successfulSearches === 0) {
+      throw new TypoSpotterApiError("Candidate searches failed. Try reloading in a moment.", "searchfailed");
+    }
+  }
+
+  private async advance(): Promise<void> {
+    if (this.busy) return;
+    this.busy = true;
+    this.view.setBusy(true);
+    this.proposal = undefined;
+    this.diffText = undefined;
+
+    try {
+      if (this.queue.length < 8) await this.refillQueue();
+
+      while (this.queue.length > 0) {
+        const candidate = this.queue.shift();
+        if (!candidate) break;
+        this.current = candidate;
+        this.view.renderQueue(candidate, this.queue);
+        this.view.setStatus(`Loading ${candidate.title}…`);
+        const snapshot = await this.api.loadPage(candidate);
+        const occurrences = findOccurrences(snapshot.text, candidate.rule);
+        if (occurrences.length === 0) {
+          this.stats.stale += 1;
+          this.view.renderStats(this.stats);
+          continue;
+        }
+
+        const selected = new Set(occurrences.map((occurrence) => occurrence.id));
+        this.proposal = {
+          candidate,
+          snapshot,
+          occurrences,
+          selected,
+          text: applyOccurrences(snapshot.text, occurrences, selected),
+          manuallyEdited: false
+        };
+        this.loadedCount += 1;
+        this.view.renderProposal(
+          this.proposal,
+          this.loadedCount,
+          this.loadedCount + this.queue.length,
+          editSummary(candidate.rule.find, candidate.rule.replace)
+        );
+        this.view.renderQueue(candidate, this.queue);
+        this.view.setBusy(false);
+        this.busy = false;
+        await this.refreshDiff();
+        return;
+      }
+
+      this.current = undefined;
+      this.view.renderQueue(undefined, []);
+      this.view.showEmpty("No candidates found", "The current rule batch did not return any reviewable occurrences. Reload to search again.");
+      this.view.setStatus("Queue finished");
+    } finally {
+      this.busy = false;
+      this.view.setBusy(false);
+    }
+  }
+
+  private changeOccurrence(id: string, selected: boolean): void {
+    if (!this.proposal || this.busy || this.proposal.manuallyEdited) return;
+    if (selected) this.proposal.selected.add(id);
+    else this.proposal.selected.delete(id);
+    this.proposal.text = applyOccurrences(
+      this.proposal.snapshot.text,
+      this.proposal.occurrences,
+      this.proposal.selected
+    );
+    this.diffText = undefined;
+    this.view.setEditorText(this.proposal.text);
+    this.view.setDirty();
+  }
+
+  private changeProposal(text: string): void {
+    if (!this.proposal || this.busy || text === this.proposal.text) return;
+    this.proposal.text = text;
+    this.proposal.manuallyEdited = true;
+    this.diffText = undefined;
+    this.view.renderOccurrences(this.proposal);
+    this.view.setDirty();
+  }
+
+  private resetProposal(): void {
+    if (!this.proposal || this.busy) return;
+    this.proposal.manuallyEdited = false;
+    this.proposal.text = applyOccurrences(
+      this.proposal.snapshot.text,
+      this.proposal.occurrences,
+      this.proposal.selected
+    );
+    this.diffText = undefined;
+    this.view.setEditorText(this.proposal.text);
+    this.view.renderOccurrences(this.proposal);
+    this.view.setDirty();
+  }
+
+  private async refreshDiff(): Promise<void> {
+    if (!this.proposal || this.busy) return;
+    if (this.proposal.text === this.proposal.snapshot.text) {
+      this.diffText = undefined;
+      this.view.setDiffError("Select at least one change before generating the diff.");
+      return;
+    }
+    this.busy = true;
+    this.view.setBusy(true);
+    this.view.setDiffLoading();
+    const textAtRequest = this.proposal.text;
+    const rows = buildLocalDiff(this.proposal.snapshot.text, textAtRequest);
+    this.diffText = textAtRequest;
+    this.view.setDiff(rows);
+    this.view.setStatus("Review the comparison, adjust the proposal if needed, then save or skip.");
+    this.busy = false;
+    this.view.setBusy(false);
+    this.view.setSaveEnabled(true);
+  }
+
+  private async selectCandidate(candidate: Candidate): Promise<void> {
+    if (this.busy || candidate === this.current) return;
+    const index = this.queue.findIndex((item) => this.candidateKey(item) === this.candidateKey(candidate));
+    if (index < 0) return;
+    const [selected] = this.queue.splice(index, 1);
+    if (!selected) return;
+    if (this.current) this.queue.push(this.current);
+    this.queue.unshift(selected);
+    this.current = undefined;
+    await this.advance();
+  }
+
+  private async skip(): Promise<void> {
+    if (this.busy || !this.proposal) return;
+    this.stats.reviewed += 1;
+    this.stats.skipped += 1;
+    this.view.renderStats(this.stats);
+    await this.advance();
+  }
+
+  private async exclude(): Promise<void> {
+    if (this.busy || !this.proposal) return;
+    this.exclusions.add(this.proposal.snapshot.pageId, this.proposal.candidate.rule.id);
+    this.stats.reviewed += 1;
+    this.stats.skipped += 1;
+    this.view.renderStats(this.stats);
+    await this.advance();
+  }
+
+  private async save(summary: string): Promise<void> {
+    if (!this.proposal || this.busy) return;
+    if (!summary.trim()) {
+      this.view.setStatus("Add an edit summary before saving.", "error");
+      return;
+    }
+    if (this.diffText !== this.proposal.text) {
+      this.view.setStatus("Refresh the diff before saving this version of the proposal.", "error");
+      this.view.setSaveEnabled(false);
+      return;
+    }
+
+    this.busy = true;
+    this.view.setBusy(true);
+    this.view.setStatus(`Saving ${this.proposal.snapshot.title}…`);
+    try {
+      const revisionId = await this.api.edit(this.proposal.snapshot, this.proposal.text, summary.trim());
+      this.stats.reviewed += 1;
+      this.stats.saved += 1;
+      this.view.renderStats(this.stats);
+      this.view.setStatus(`Saved revision ${revisionId}. Loading the next candidate…`, "success");
+      this.busy = false;
+      this.view.setBusy(false);
+      await this.advance();
+    } catch (error) {
+      const code = error instanceof TypoSpotterApiError ? error.code : "unknown";
+      this.view.setStatus(errorMessage(error), "error");
+      this.busy = false;
+      this.view.setBusy(false);
+      if (code === "editconflict" && this.current) {
+        const conflicted = this.current;
+        this.queue.unshift(conflicted);
+        await this.advance();
+      } else {
+        this.view.setSaveEnabled(this.diffText === this.proposal?.text);
+      }
+    }
+  }
+}
