@@ -40,11 +40,16 @@ export interface Proposal {
   manuallyEdited: boolean;
 }
 
+export interface PreparedCandidate {
+  candidate: Candidate;
+  snapshot: PageSnapshot;
+  occurrences: Occurrence[];
+}
+
 export interface SessionStats {
   reviewed: number;
   saved: number;
   skipped: number;
-  stale: number;
 }
 
 export interface SearchBatch {

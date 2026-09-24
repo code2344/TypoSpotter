@@ -84,6 +84,8 @@ export class MediaWikiApi {
         action: "query",
         pageids: candidate.pageId,
         prop: "info|revisions",
+        intestactions: "edit",
+        intestactionsdetail: "boolean",
         rvprop: "ids|timestamp|content|contentmodel",
         rvslots: "main",
         curtimestamp: 1,
@@ -96,6 +98,9 @@ export class MediaWikiApi {
       const slot = revision?.slots?.main;
       if (!page || page.missing || !revision || typeof slot?.content !== "string") {
         throw new TypoSpotterApiError("The current page text is unavailable.", "missingcontent");
+      }
+      if (page.actions?.edit !== true) {
+        throw new TypoSpotterApiError("This account cannot edit the page.", "permissiondenied");
       }
       return {
         pageId: page.pageid,

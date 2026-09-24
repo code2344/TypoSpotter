@@ -113,7 +113,7 @@ interface CandidateSource {
 - Keep only a small look-ahead buffer (for example 20–30 candidates).
 - Fetch detail for the current item and prefetch at most the next one or two.
 - Do not repeatedly search while the editor is idle.
-- Treat a missing match in freshly fetched wikitext as stale and skip it automatically with a visible explanation.
+- Validate search results against freshly fetched wikitext and the current user's edit permission before adding them to the visible queue. Search-index mismatches and pages with no safe occurrences are filtered silently during background replenishment.
 - Session state may live in `sessionStorage`; durable settings and “not a typo on this page” exceptions may use `mw.storage`/`localStorage` with a versioned schema.
 
 ## Safe proposal generation
@@ -194,7 +194,7 @@ Do not set the `bot` flag. Do not send a custom change tag unless the tag has ac
 Default summary format:
 
 ```text
-Fix typo: "recieve" -> "receive" ([[User:SuperCode111/TypoSpotter|TS v0.2.1]])
+Fix typo: "recieve" -> "receive" ([[User:SuperCode111/TypoSpotter|TS v0.3.0]])
 ```
 
 Use straight ASCII quotation marks and `->` exactly as shown. The link label contains the version of the script that performed the edit and must be generated from the same version constant used by the application UI and bundle metadata rather than repeated as an unrelated string.

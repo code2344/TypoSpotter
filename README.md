@@ -2,7 +2,7 @@
 
 TypoSpotter is a human-reviewed typo fixing userscript for English Wikipedia. It searches for a small catalog of likely misspellings, loads the current article wikitext, presents a focused review diff with surrounding context, and saves only after the editor explicitly approves the proposal.
 
-Version 0.2.1 is an initial working release intended for sandbox and limited manual testing.
+Version 0.3.0 is an initial working release intended for sandbox and limited manual testing.
 
 ## Versioning
 
@@ -38,7 +38,7 @@ TypoSpotter fills the browser viewport and keeps scrolling inside its queue, dif
 - `E` — switch from the diff to the wikitext editor
 - `Escape` — leave the wikitext editor and return to the diff
 
-Queue entries are clickable, so candidates can be reviewed out of order. The current candidate returns to the queue when another one is selected. `Commonly misspelled English words` is permanently excluded from discovery because its examples are intentional.
+Queue entries are clickable, so candidates can be reviewed out of order. The current candidate returns to the queue when another one is selected. TypoSpotter replenishes the queue in the background and displays a page only after confirming that the current revision is editable and contains at least one safe occurrence. `Commonly misspelled English words` is permanently excluded from discovery because its examples are intentional.
 
 ## Build
 

@@ -3,12 +3,14 @@ import { editSummary, isIgnoredTitle, QUEUE_TARGET } from "./config";
 import { buildLocalDiff } from "./diff/local";
 import { RULES } from "./rules/catalog";
 import { ExclusionStore } from "./state/exclusions";
-import type { Candidate, Proposal, SessionStats } from "./types";
+import type { Candidate, PreparedCandidate, Proposal, SessionStats } from "./types";
 import { TypoSpotterView } from "./ui/view";
 import { applyOccurrences } from "./wikitext/proposal";
 import { findOccurrences } from "./wikitext/scanner";
 
 const SEARCH_RULES_PER_BATCH = 5;
+const VALIDATION_WORKERS = 4;
+const MAX_SEARCH_BATCHES_PER_REFILL = 4;
 
 function errorMessage(error: unknown): string {
   if (!(error instanceof TypoSpotterApiError)) {
@@ -32,16 +34,17 @@ export class TypoSpotterApp {
   private readonly api = new MediaWikiApi();
   private readonly exclusions = new ExclusionStore();
   private readonly view: TypoSpotterView;
-  private readonly queue: Candidate[] = [];
+  private readonly queue: PreparedCandidate[] = [];
   private readonly seen = new Set<string>();
   private readonly continuations = new Map<string, number>();
-  private stats: SessionStats = { reviewed: 0, saved: 0, skipped: 0, stale: 0 };
+  private stats: SessionStats = { reviewed: 0, saved: 0, skipped: 0 };
   private proposal?: Proposal;
-  private current?: Candidate;
+  private current?: PreparedCandidate;
   private nextRuleIndex = 0;
   private busy = false;
   private diffText?: string;
   private loadedCount = 0;
+  private refillPromise?: Promise<void>;
 
   constructor(container: HTMLElement) {
     this.view = new TypoSpotterView(container);
@@ -68,7 +71,7 @@ export class TypoSpotterApp {
     this.view.renderQueue(undefined, []);
     this.view.setStatus("Searching English Wikipedia for a small set of likely typos…");
     try {
-      await this.refillQueue();
+      await this.refillQueue(1);
       await this.advance();
     } catch (error) {
       this.view.showEmpty("Could not start TypoSpotter", errorMessage(error));
@@ -80,43 +83,88 @@ export class TypoSpotterApp {
     return `${candidate.pageId}:${candidate.rule.id}`;
   }
 
-  private async refillQueue(): Promise<void> {
-    if (this.queue.length >= QUEUE_TARGET) return;
-
-    const rules = Array.from({ length: SEARCH_RULES_PER_BATCH }, (_, offset) => {
-      const index = (this.nextRuleIndex + offset) % RULES.length;
-      return RULES[index];
-    }).filter((rule): rule is (typeof RULES)[number] => Boolean(rule));
-    this.nextRuleIndex = (this.nextRuleIndex + SEARCH_RULES_PER_BATCH) % RULES.length;
-
-    const batches = await Promise.allSettled(
-      rules.map((rule) => this.api.search(rule, this.continuations.get(rule.id)))
-    );
-    let successfulSearches = 0;
-    batches.forEach((result, index) => {
-      const rule = rules[index];
-      if (result.status !== "fulfilled" || !rule) return;
-      successfulSearches += 1;
-      if (result.value.continueToken !== undefined) {
-        this.continuations.set(rule.id, result.value.continueToken);
-      } else {
-        this.continuations.delete(rule.id);
-      }
-      for (const candidate of result.value.candidates) {
-        const key = this.candidateKey(candidate);
-        if (
-          isIgnoredTitle(candidate.title) ||
-          this.seen.has(key) ||
-          this.exclusions.has(candidate.pageId, candidate.rule.id)
-        ) continue;
-        this.seen.add(key);
-        this.queue.push(candidate);
-      }
-    });
-
-    if (successfulSearches === 0) {
-      throw new TypoSpotterApiError("Candidate searches failed. Try reloading in a moment.", "searchfailed");
+  private async refillQueue(target = QUEUE_TARGET): Promise<void> {
+    if (this.queue.length >= target) return;
+    if (this.refillPromise) {
+      await this.refillPromise;
+      if (this.queue.length < target) return this.refillQueue(target);
+      return;
     }
+
+    this.refillPromise = this.buildValidatedQueue(target);
+    try {
+      await this.refillPromise;
+    } finally {
+      this.refillPromise = undefined;
+    }
+  }
+
+  private async buildValidatedQueue(target: number): Promise<void> {
+    let batchesTried = 0;
+
+    while (this.queue.length < target && batchesTried < MAX_SEARCH_BATCHES_PER_REFILL) {
+      batchesTried += 1;
+
+      const rules = Array.from({ length: SEARCH_RULES_PER_BATCH }, (_, offset) => {
+        const index = (this.nextRuleIndex + offset) % RULES.length;
+        return RULES[index];
+      }).filter((rule): rule is (typeof RULES)[number] => Boolean(rule));
+      this.nextRuleIndex = (this.nextRuleIndex + SEARCH_RULES_PER_BATCH) % RULES.length;
+
+      const batches = await Promise.allSettled(
+        rules.map((rule) => this.api.search(rule, this.continuations.get(rule.id)))
+      );
+      let successfulSearches = 0;
+      const candidates: Candidate[] = [];
+      batches.forEach((result, index) => {
+        const rule = rules[index];
+        if (result.status !== "fulfilled" || !rule) return;
+        successfulSearches += 1;
+        if (result.value.continueToken !== undefined) {
+          this.continuations.set(rule.id, result.value.continueToken);
+        } else {
+          this.continuations.delete(rule.id);
+        }
+        for (const candidate of result.value.candidates) {
+          const key = this.candidateKey(candidate);
+          if (
+            isIgnoredTitle(candidate.title) ||
+            this.seen.has(key) ||
+            this.exclusions.has(candidate.pageId, candidate.rule.id)
+          ) continue;
+          this.seen.add(key);
+          candidates.push(candidate);
+        }
+      });
+
+      if (successfulSearches === 0) {
+        throw new TypoSpotterApiError("Candidate searches failed. Try reloading in a moment.", "searchfailed");
+      }
+
+      let nextIndex = 0;
+      const worker = async (): Promise<void> => {
+        while (this.queue.length < target && nextIndex < candidates.length) {
+          const candidate = candidates[nextIndex++];
+          if (!candidate) return;
+          try {
+            const snapshot = await this.api.loadPage(candidate);
+            const occurrences = findOccurrences(snapshot.text, candidate.rule);
+            if (occurrences.length === 0) continue;
+            this.queue.push({ candidate, snapshot, occurrences });
+            this.view.renderQueue(this.current?.candidate, this.queue.map((item) => item.candidate));
+          } catch {
+            // A candidate that cannot be fetched safely is omitted from the review queue.
+          }
+        }
+      };
+      await Promise.all(Array.from({ length: VALIDATION_WORKERS }, () => worker()));
+    }
+  }
+
+  private refillInBackground(): void {
+    void this.refillQueue().catch(() => {
+      // The current proposal remains usable; the next foreground refill can retry.
+    });
   }
 
   private async advance(): Promise<void> {
@@ -127,21 +175,14 @@ export class TypoSpotterApp {
     this.diffText = undefined;
 
     try {
-      if (this.queue.length < 8) await this.refillQueue();
+      if (this.queue.length === 0) await this.refillQueue(1);
 
-      while (this.queue.length > 0) {
-        const candidate = this.queue.shift();
-        if (!candidate) break;
-        this.current = candidate;
-        this.view.renderQueue(candidate, this.queue);
+      const prepared = this.queue.shift();
+      if (prepared) {
+        const { candidate, snapshot, occurrences } = prepared;
+        this.current = prepared;
+        this.view.renderQueue(candidate, this.queue.map((item) => item.candidate));
         this.view.setStatus(`Loading ${candidate.title}…`);
-        const snapshot = await this.api.loadPage(candidate);
-        const occurrences = findOccurrences(snapshot.text, candidate.rule);
-        if (occurrences.length === 0) {
-          this.stats.stale += 1;
-          this.view.renderStats(this.stats);
-          continue;
-        }
 
         const selected = new Set(occurrences.map((occurrence) => occurrence.id));
         this.proposal = {
@@ -159,10 +200,11 @@ export class TypoSpotterApp {
           this.loadedCount + this.queue.length,
           editSummary(candidate.rule.find, candidate.rule.replace)
         );
-        this.view.renderQueue(candidate, this.queue);
+        this.view.renderQueue(candidate, this.queue.map((item) => item.candidate));
         this.view.setBusy(false);
         this.busy = false;
         await this.refreshDiff();
+        this.refillInBackground();
         return;
       }
 
@@ -234,8 +276,8 @@ export class TypoSpotterApp {
   }
 
   private async selectCandidate(candidate: Candidate): Promise<void> {
-    if (this.busy || candidate === this.current) return;
-    const index = this.queue.findIndex((item) => this.candidateKey(item) === this.candidateKey(candidate));
+    if (this.busy || this.current?.candidate === candidate) return;
+    const index = this.queue.findIndex((item) => this.candidateKey(item.candidate) === this.candidateKey(candidate));
     if (index < 0) return;
     const [selected] = this.queue.splice(index, 1);
     if (!selected) return;
@@ -292,8 +334,14 @@ export class TypoSpotterApp {
       this.busy = false;
       this.view.setBusy(false);
       if (code === "editconflict" && this.current) {
-        const conflicted = this.current;
-        this.queue.unshift(conflicted);
+        const candidate = this.current.candidate;
+        try {
+          const snapshot = await this.api.loadPage(candidate);
+          const occurrences = findOccurrences(snapshot.text, candidate.rule);
+          if (occurrences.length > 0) this.queue.unshift({ candidate, snapshot, occurrences });
+        } catch {
+          // If the new revision is no longer reviewable, continue with the queue.
+        }
         await this.advance();
       } else {
         this.view.setSaveEnabled(this.diffText === this.proposal?.text);

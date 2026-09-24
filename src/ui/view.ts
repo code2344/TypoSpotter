@@ -80,8 +80,7 @@ export class TypoSpotterView {
     const labels: Array<[keyof SessionStats, string]> = [
       ["reviewed", "Reviewed"],
       ["saved", "Saved"],
-      ["skipped", "Skipped"],
-      ["stale", "Stale"]
+      ["skipped", "Skipped"]
     ];
     for (const [key, label] of labels) {
       const stat = element("div", "ts-stat");
