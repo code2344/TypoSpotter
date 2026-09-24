@@ -2,7 +2,7 @@
 
 TypoSpotter is a human-reviewed typo fixing userscript for English Wikipedia. It searches for a small catalog of likely misspellings, loads the current article wikitext, presents a focused review diff with surrounding context, and saves only after the editor explicitly approves the proposal.
 
-Version 0.2.0 is an initial working release intended for sandbox and limited manual testing.
+Version 0.2.1 is an initial working release intended for sandbox and limited manual testing.
 
 ## Versioning
 
