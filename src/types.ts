@@ -46,6 +46,16 @@ export interface PreparedCandidate {
   occurrences: Occurrence[];
 }
 
+export interface ExclusionEntry {
+  key: string;
+  pageId: number;
+  title: string;
+  ruleId: string;
+  find: string;
+  replacement: string;
+  createdAt: string;
+}
+
 export interface SessionStats {
   reviewed: number;
   saved: number;

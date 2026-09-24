@@ -1,6 +1,6 @@
 import { ABOUT_PAGE, VERSION } from "../config";
 import { changedSegments, type LocalDiffRow } from "../diff/local";
-import type { Candidate, Proposal, SessionStats } from "../types";
+import type { Candidate, ExclusionEntry, Proposal, SessionStats } from "../types";
 import { STYLES } from "./styles";
 
 export interface ViewActions {
@@ -10,6 +10,8 @@ export interface ViewActions {
   onResetProposal(): void;
   onSkip(): void;
   onExclude(): void;
+  onRemoveExclusion(key: string): void;
+  onClearExclusions(): void;
   onSave(summary: string): void;
   onQueueSelect(candidate: Candidate): void;
 }
@@ -49,6 +51,9 @@ export class TypoSpotterView {
   private readonly resetButton = element("button", "ts-button ts-button-quiet");
   private readonly skipButton = element("button", "ts-button");
   private readonly excludeButton = element("button", "ts-button ts-button-quiet ts-button-danger");
+  private readonly exclusionsButton = element("button", "ts-button ts-button-quiet");
+  private readonly exclusionsPanel = element("section", "ts-exclusions-panel");
+  private readonly exclusionsList = element("div", "ts-exclusions-list");
   private readonly saveButton = element("button", "ts-button ts-button-primary");
   private readonly diffPanel = element("section", "ts-panel ts-diff-panel");
   private readonly editorPanel = element("section", "ts-panel ts-editor-panel");
@@ -68,7 +73,11 @@ export class TypoSpotterView {
     const version = element("span", "ts-version");
     version.textContent = `v${VERSION}`;
     brand.append(brandName, version);
-    topbar.append(brand, link("About and help", mw.util.getUrl(ABOUT_PAGE)));
+    const topbarActions = element("div", "ts-topbar-actions");
+    this.exclusionsButton.type = "button";
+    this.exclusionsButton.addEventListener("click", () => this.openExclusions());
+    topbarActions.append(this.exclusionsButton, link("About and help", mw.util.getUrl(ABOUT_PAGE)));
+    topbar.append(brand, topbarActions);
 
     const layout = element("div", "ts-layout");
     const sidebar = element("aside", "ts-sidebar");
@@ -107,10 +116,38 @@ export class TypoSpotterView {
     this.buildReview();
     main.append(this.status, this.empty, this.review);
     layout.append(sidebar, main);
-    this.root.append(topbar, layout);
+    this.buildExclusionsPanel();
+    this.root.append(topbar, layout, this.exclusionsPanel);
 
     container.replaceChildren(this.root);
     document.addEventListener("keydown", (event) => this.handleShortcut(event));
+  }
+
+  private buildExclusionsPanel(): void {
+    this.exclusionsPanel.hidden = true;
+    this.exclusionsPanel.setAttribute("aria-label", "Saved not-typo exclusions");
+    const header = element("div", "ts-exclusions-header");
+    const title = element("h2");
+    title.textContent = "Not typos";
+    const close = element("button", "ts-button");
+    close.type = "button";
+    close.textContent = "Close";
+    close.addEventListener("click", () => { this.exclusionsPanel.hidden = true; });
+    header.append(title, close);
+    const description = element("p", "ts-exclusions-description");
+    description.textContent = "These page and spelling pairs stay excluded in this browser.";
+    const footer = element("div", "ts-exclusions-footer");
+    const clear = element("button", "ts-button ts-button-danger");
+    clear.type = "button";
+    clear.textContent = "Clear all";
+    clear.addEventListener("click", () => this.actions?.onClearExclusions());
+    footer.append(clear);
+    this.exclusionsPanel.append(header, description, this.exclusionsList, footer);
+  }
+
+  private openExclusions(): void {
+    this.exclusionsPanel.hidden = false;
+    this.exclusionsPanel.querySelector<HTMLButtonElement>("button")?.focus();
   }
 
   setActions(actions: ViewActions): void {
@@ -260,6 +297,32 @@ export class TypoSpotterView {
       const node = this.statsNodes.get(key);
       if (node) node.textContent = String(stats[key]);
     });
+  }
+
+  renderExclusions(entries: ExclusionEntry[]): void {
+    this.exclusionsButton.textContent = `Not typos (${entries.length})`;
+    this.exclusionsList.replaceChildren();
+    if (entries.length === 0) {
+      const empty = element("p", "ts-exclusions-empty");
+      empty.textContent = "No saved exclusions.";
+      this.exclusionsList.append(empty);
+      return;
+    }
+    for (const entry of entries) {
+      const row = element("div", "ts-exclusion-row");
+      const details = element("div");
+      const title = element("div", "ts-exclusion-title");
+      title.textContent = entry.title;
+      const rule = element("div", "ts-exclusion-rule");
+      rule.textContent = entry.replacement ? `${entry.find} → ${entry.replacement}` : entry.find;
+      details.append(title, rule);
+      const remove = element("button", "ts-button ts-button-quiet ts-button-danger");
+      remove.type = "button";
+      remove.textContent = "Remove";
+      remove.addEventListener("click", () => this.actions?.onRemoveExclusion(entry.key));
+      row.append(details, remove);
+      this.exclusionsList.append(row);
+    }
   }
 
   renderProposal(proposal: Proposal, queuePosition: number, total: number, summary: string): void {

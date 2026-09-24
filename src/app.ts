@@ -55,9 +55,12 @@ export class TypoSpotterApp {
       onResetProposal: () => this.resetProposal(),
       onSkip: () => void this.skip(),
       onExclude: () => void this.exclude(),
+      onRemoveExclusion: (key) => this.removeExclusion(key),
+      onClearExclusions: () => this.clearExclusions(),
       onSave: (summary) => void this.save(summary),
       onQueueSelect: (candidate) => void this.selectCandidate(candidate)
     });
+    this.view.renderExclusions(this.exclusions.list());
   }
 
   async start(): Promise<void> {
@@ -297,11 +300,22 @@ export class TypoSpotterApp {
 
   private async exclude(): Promise<void> {
     if (this.busy || !this.proposal) return;
-    this.exclusions.add(this.proposal.snapshot.pageId, this.proposal.candidate.rule.id);
+    this.exclusions.add(this.proposal.candidate);
+    this.view.renderExclusions(this.exclusions.list());
     this.stats.reviewed += 1;
     this.stats.skipped += 1;
     this.view.renderStats(this.stats);
     await this.advance();
+  }
+
+  private removeExclusion(key: string): void {
+    this.exclusions.remove(key);
+    this.view.renderExclusions(this.exclusions.list());
+  }
+
+  private clearExclusions(): void {
+    this.exclusions.clear();
+    this.view.renderExclusions([]);
   }
 
   private async save(summary: string): Promise<void> {

@@ -59,6 +59,7 @@ body.ts-active > :not(#ts-host) {
 }
 
 .ts-brand { display: flex; align-items: baseline; gap: .65rem; }
+.ts-topbar-actions { display: flex; align-items: center; gap: .65rem; }
 .ts-brand-name { font-family: Georgia, "Times New Roman", serif; font-size: 1.65rem; font-weight: 700; }
 .ts-version { color: var(--ts-muted); font-size: .8rem; font-weight: 600; letter-spacing: .04em; }
 .ts-topbar a, .ts-link { color: var(--ts-link); text-decoration: none; }
@@ -200,6 +201,28 @@ body.ts-active > :not(#ts-host) {
 .ts-button-primary:hover:not(:disabled) { background: var(--ts-link-hover); }
 .ts-button-quiet { background: transparent; border-color: transparent; color: var(--ts-link); }
 .ts-button-danger { color: var(--ts-danger); }
+
+.ts-exclusions-panel {
+  position: absolute;
+  inset: 52px 0 0 auto;
+  z-index: 20;
+  width: min(430px, 100vw);
+  display: flex;
+  flex-direction: column;
+  padding: 1rem;
+  border-left: 1px solid var(--ts-border-subtle);
+  background: var(--ts-bg);
+  box-shadow: -8px 0 20px rgba(0, 0, 0, .12);
+}
+.ts-exclusions-panel[hidden] { display: none !important; }
+.ts-exclusions-header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.ts-exclusions-header h2 { margin: 0; font: 1.35rem/1.2 Georgia, "Times New Roman", serif; }
+.ts-exclusions-description { margin: .5rem 0 .8rem; color: var(--ts-muted); font-size: .86rem; }
+.ts-exclusions-list { flex: 1 1 auto; min-height: 0; overflow: auto; border-top: 1px solid var(--ts-border-subtle); }
+.ts-exclusion-row { display: flex; justify-content: space-between; gap: .75rem; align-items: center; padding: .65rem 0; border-bottom: 1px solid var(--ts-border-subtle); }
+.ts-exclusion-title { font-weight: 600; }
+.ts-exclusion-rule, .ts-exclusions-empty { color: var(--ts-muted); font-size: .8rem; }
+.ts-exclusions-footer { flex: 0 0 auto; padding-top: .8rem; }
 
 @media (max-width: 850px) {
   .ts-layout { grid-template-columns: 1fr; }

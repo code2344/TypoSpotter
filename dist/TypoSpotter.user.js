@@ -1,5 +1,5 @@
 // <nowiki>
-// TypoSpotter v0.3.1
+// TypoSpotter v0.4.0
 // Source: https://github.com/code2344/TypoSpotter
 "use strict";
 (() => {
@@ -139,7 +139,7 @@
   };
 
   // src/config.ts
-  var VERSION = "0.3.1";
+  var VERSION = "0.4.0";
   var RUN_PAGE = "User:SuperCode111/TypoSpotter/run";
   var ABOUT_PAGE = "User:SuperCode111/TypoSpotter";
   var EXCLUSIONS_KEY = "TypoSpotter-exclusions-v1";
@@ -234,19 +234,46 @@
   // src/state/exclusions.ts
   var ExclusionStore = class {
     constructor() {
-      this.values = new Set(this.read());
+      this.values = new Map(this.read().map((entry) => [entry.key, entry]));
     }
     read() {
       try {
         const raw = mw.storage?.get(EXCLUSIONS_KEY) ?? localStorage.getItem(EXCLUSIONS_KEY);
         const parsed = raw ? JSON.parse(raw) : [];
-        return Array.isArray(parsed) ? parsed.filter((item) => typeof item === "string") : [];
+        if (!Array.isArray(parsed)) return [];
+        return parsed.flatMap((item) => {
+          if (typeof item === "string") {
+            const [pageIdText, ruleId = "unknown"] = item.split(":", 2);
+            const pageId = Number(pageIdText);
+            if (!Number.isInteger(pageId)) return [];
+            return [{
+              key: item,
+              pageId,
+              title: `Page ${pageId}`,
+              ruleId,
+              find: ruleId,
+              replacement: "",
+              createdAt: ""
+            }];
+          }
+          if (!item || typeof item !== "object") return [];
+          const entry = item;
+          return typeof entry.key === "string" && typeof entry.pageId === "number" && typeof entry.ruleId === "string" && typeof entry.title === "string" ? [{
+            key: entry.key,
+            pageId: entry.pageId,
+            title: entry.title,
+            ruleId: entry.ruleId,
+            find: typeof entry.find === "string" ? entry.find : entry.ruleId,
+            replacement: typeof entry.replacement === "string" ? entry.replacement : "",
+            createdAt: typeof entry.createdAt === "string" ? entry.createdAt : ""
+          }] : [];
+        });
       } catch {
         return [];
       }
     }
     write() {
-      const raw = JSON.stringify([...this.values]);
+      const raw = JSON.stringify(this.list());
       if (mw.storage) {
         mw.storage.set(EXCLUSIONS_KEY, raw);
       } else {
@@ -259,8 +286,28 @@
     has(pageId, ruleId) {
       return this.values.has(this.key(pageId, ruleId));
     }
-    add(pageId, ruleId) {
-      this.values.add(this.key(pageId, ruleId));
+    add(candidate) {
+      const key = this.key(candidate.pageId, candidate.rule.id);
+      this.values.set(key, {
+        key,
+        pageId: candidate.pageId,
+        title: candidate.title,
+        ruleId: candidate.rule.id,
+        find: candidate.rule.find,
+        replacement: candidate.rule.replace,
+        createdAt: (/* @__PURE__ */ new Date()).toISOString()
+      });
+      this.write();
+    }
+    list() {
+      return [...this.values.values()].sort((left, right) => left.title.localeCompare(right.title));
+    }
+    remove(key) {
+      this.values.delete(key);
+      this.write();
+    }
+    clear() {
+      this.values.clear();
       this.write();
     }
   };
@@ -327,6 +374,7 @@ body.ts-active > :not(#ts-host) {
 }
 
 .ts-brand { display: flex; align-items: baseline; gap: .65rem; }
+.ts-topbar-actions { display: flex; align-items: center; gap: .65rem; }
 .ts-brand-name { font-family: Georgia, "Times New Roman", serif; font-size: 1.65rem; font-weight: 700; }
 .ts-version { color: var(--ts-muted); font-size: .8rem; font-weight: 600; letter-spacing: .04em; }
 .ts-topbar a, .ts-link { color: var(--ts-link); text-decoration: none; }
@@ -469,6 +517,28 @@ body.ts-active > :not(#ts-host) {
 .ts-button-quiet { background: transparent; border-color: transparent; color: var(--ts-link); }
 .ts-button-danger { color: var(--ts-danger); }
 
+.ts-exclusions-panel {
+  position: absolute;
+  inset: 52px 0 0 auto;
+  z-index: 20;
+  width: min(430px, 100vw);
+  display: flex;
+  flex-direction: column;
+  padding: 1rem;
+  border-left: 1px solid var(--ts-border-subtle);
+  background: var(--ts-bg);
+  box-shadow: -8px 0 20px rgba(0, 0, 0, .12);
+}
+.ts-exclusions-panel[hidden] { display: none !important; }
+.ts-exclusions-header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.ts-exclusions-header h2 { margin: 0; font: 1.35rem/1.2 Georgia, "Times New Roman", serif; }
+.ts-exclusions-description { margin: .5rem 0 .8rem; color: var(--ts-muted); font-size: .86rem; }
+.ts-exclusions-list { flex: 1 1 auto; min-height: 0; overflow: auto; border-top: 1px solid var(--ts-border-subtle); }
+.ts-exclusion-row { display: flex; justify-content: space-between; gap: .75rem; align-items: center; padding: .65rem 0; border-bottom: 1px solid var(--ts-border-subtle); }
+.ts-exclusion-title { font-weight: 600; }
+.ts-exclusion-rule, .ts-exclusions-empty { color: var(--ts-muted); font-size: .8rem; }
+.ts-exclusions-footer { flex: 0 0 auto; padding-top: .8rem; }
+
 @media (max-width: 850px) {
   .ts-layout { grid-template-columns: 1fr; }
   .ts-layout { grid-template-rows: 105px minmax(0, 1fr); }
@@ -526,6 +596,9 @@ body.ts-active > :not(#ts-host) {
       this.resetButton = element("button", "ts-button ts-button-quiet");
       this.skipButton = element("button", "ts-button");
       this.excludeButton = element("button", "ts-button ts-button-quiet ts-button-danger");
+      this.exclusionsButton = element("button", "ts-button ts-button-quiet");
+      this.exclusionsPanel = element("section", "ts-exclusions-panel");
+      this.exclusionsList = element("div", "ts-exclusions-list");
       this.saveButton = element("button", "ts-button ts-button-primary");
       this.diffPanel = element("section", "ts-panel ts-diff-panel");
       this.editorPanel = element("section", "ts-panel ts-editor-panel");
@@ -541,7 +614,11 @@ body.ts-active > :not(#ts-host) {
       const version = element("span", "ts-version");
       version.textContent = `v${VERSION}`;
       brand.append(brandName, version);
-      topbar.append(brand, link("About and help", mw.util.getUrl(ABOUT_PAGE)));
+      const topbarActions = element("div", "ts-topbar-actions");
+      this.exclusionsButton.type = "button";
+      this.exclusionsButton.addEventListener("click", () => this.openExclusions());
+      topbarActions.append(this.exclusionsButton, link("About and help", mw.util.getUrl(ABOUT_PAGE)));
+      topbar.append(brand, topbarActions);
       const layout = element("div", "ts-layout");
       const sidebar = element("aside", "ts-sidebar");
       const queueHeading = element("h2", "ts-section-title");
@@ -578,9 +655,37 @@ body.ts-active > :not(#ts-host) {
       this.buildReview();
       main.append(this.status, this.empty, this.review);
       layout.append(sidebar, main);
-      this.root.append(topbar, layout);
+      this.buildExclusionsPanel();
+      this.root.append(topbar, layout, this.exclusionsPanel);
       container.replaceChildren(this.root);
       document.addEventListener("keydown", (event) => this.handleShortcut(event));
+    }
+    buildExclusionsPanel() {
+      this.exclusionsPanel.hidden = true;
+      this.exclusionsPanel.setAttribute("aria-label", "Saved not-typo exclusions");
+      const header = element("div", "ts-exclusions-header");
+      const title = element("h2");
+      title.textContent = "Not typos";
+      const close = element("button", "ts-button");
+      close.type = "button";
+      close.textContent = "Close";
+      close.addEventListener("click", () => {
+        this.exclusionsPanel.hidden = true;
+      });
+      header.append(title, close);
+      const description = element("p", "ts-exclusions-description");
+      description.textContent = "These page and spelling pairs stay excluded in this browser.";
+      const footer = element("div", "ts-exclusions-footer");
+      const clear = element("button", "ts-button ts-button-danger");
+      clear.type = "button";
+      clear.textContent = "Clear all";
+      clear.addEventListener("click", () => this.actions?.onClearExclusions());
+      footer.append(clear);
+      this.exclusionsPanel.append(header, description, this.exclusionsList, footer);
+    }
+    openExclusions() {
+      this.exclusionsPanel.hidden = false;
+      this.exclusionsPanel.querySelector("button")?.focus();
     }
     setActions(actions) {
       this.actions = actions;
@@ -715,6 +820,31 @@ body.ts-active > :not(#ts-host) {
         const node = this.statsNodes.get(key);
         if (node) node.textContent = String(stats[key]);
       });
+    }
+    renderExclusions(entries) {
+      this.exclusionsButton.textContent = `Not typos (${entries.length})`;
+      this.exclusionsList.replaceChildren();
+      if (entries.length === 0) {
+        const empty = element("p", "ts-exclusions-empty");
+        empty.textContent = "No saved exclusions.";
+        this.exclusionsList.append(empty);
+        return;
+      }
+      for (const entry of entries) {
+        const row = element("div", "ts-exclusion-row");
+        const details = element("div");
+        const title = element("div", "ts-exclusion-title");
+        title.textContent = entry.title;
+        const rule = element("div", "ts-exclusion-rule");
+        rule.textContent = entry.replacement ? `${entry.find} \u2192 ${entry.replacement}` : entry.find;
+        details.append(title, rule);
+        const remove = element("button", "ts-button ts-button-quiet ts-button-danger");
+        remove.type = "button";
+        remove.textContent = "Remove";
+        remove.addEventListener("click", () => this.actions?.onRemoveExclusion(entry.key));
+        row.append(details, remove);
+        this.exclusionsList.append(row);
+      }
     }
     renderProposal(proposal, queuePosition, total, summary) {
       this.empty.hidden = true;
@@ -1002,9 +1132,12 @@ body.ts-active > :not(#ts-host) {
         onResetProposal: () => this.resetProposal(),
         onSkip: () => void this.skip(),
         onExclude: () => void this.exclude(),
+        onRemoveExclusion: (key) => this.removeExclusion(key),
+        onClearExclusions: () => this.clearExclusions(),
         onSave: (summary) => void this.save(summary),
         onQueueSelect: (candidate) => void this.selectCandidate(candidate)
       });
+      this.view.renderExclusions(this.exclusions.list());
     }
     async start() {
       if (!mw.config.get("wgUserName")) {
@@ -1214,11 +1347,20 @@ body.ts-active > :not(#ts-host) {
     }
     async exclude() {
       if (this.busy || !this.proposal) return;
-      this.exclusions.add(this.proposal.snapshot.pageId, this.proposal.candidate.rule.id);
+      this.exclusions.add(this.proposal.candidate);
+      this.view.renderExclusions(this.exclusions.list());
       this.stats.reviewed += 1;
       this.stats.skipped += 1;
       this.view.renderStats(this.stats);
       await this.advance();
+    }
+    removeExclusion(key) {
+      this.exclusions.remove(key);
+      this.view.renderExclusions(this.exclusions.list());
+    }
+    clearExclusions() {
+      this.exclusions.clear();
+      this.view.renderExclusions([]);
     }
     async save(summary) {
       if (!this.proposal || this.busy) return;
