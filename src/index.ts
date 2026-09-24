@@ -7,15 +7,11 @@ async function boot(): Promise<void> {
   }
 
   await Promise.resolve(mw.loader.using(["mediawiki.api", "mediawiki.util"]));
-  const content = document.querySelector<HTMLElement>("#content");
-
-  if (!content) {
-    mw.notify?.("TypoSpotter could not find the page content area.", { type: "error" });
-    return;
-  }
-
   document.body.classList.add("ts-active");
-  const app = new TypoSpotterApp(content);
+  const host = document.createElement("div");
+  host.id = "ts-host";
+  document.body.append(host);
+  const app = new TypoSpotterApp(host);
   await app.start();
 }
 

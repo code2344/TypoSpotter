@@ -1,5 +1,5 @@
 // <nowiki>
-// TypoSpotter v0.3.0
+// TypoSpotter v0.3.1
 // Source: https://github.com/code2344/TypoSpotter
 "use strict";
 (() => {
@@ -139,7 +139,7 @@
   };
 
   // src/config.ts
-  var VERSION = "0.3.0";
+  var VERSION = "0.3.1";
   var RUN_PAGE = "User:SuperCode111/TypoSpotter/run";
   var ABOUT_PAGE = "User:SuperCode111/TypoSpotter";
   var EXCLUSIONS_KEY = "TypoSpotter-exclusions-v1";
@@ -271,28 +271,20 @@ body.ts-active {
   overflow: hidden !important;
 }
 
-body.ts-active #content {
-  width: 100% !important;
-  max-width: none !important;
-  margin: 0 !important;
-  padding: 0 !important;
-}
-
-body.ts-active .mw-content-container,
-body.ts-active .mw-page-container-inner {
-  width: 100% !important;
-  max-width: none !important;
-  margin: 0 !important;
-}
-
-body.ts-active .mw-page-container-inner {
-  grid-template-columns: minmax(0, 1fr) !important;
-}
-
-body.ts-active .vector-column-start,
-body.ts-active .vector-column-end,
-body.ts-active #siteNotice {
+body.ts-active > :not(#ts-host) {
   display: none !important;
+}
+
+#ts-host {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483647;
+  width: 100vw;
+  height: 100dvh;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background: var(--background-color-base, #fff);
 }
 
 #ts-root {
@@ -309,7 +301,7 @@ body.ts-active #siteNotice {
   --ts-danger: var(--color-destructive, #b32424);
   color: var(--ts-text);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  position: fixed;
+  position: absolute;
   inset: 0;
   z-index: 1000;
   width: 100vw;
@@ -1278,13 +1270,11 @@ body.ts-active #siteNotice {
       return;
     }
     await Promise.resolve(mw.loader.using(["mediawiki.api", "mediawiki.util"]));
-    const content = document.querySelector("#content");
-    if (!content) {
-      mw.notify?.("TypoSpotter could not find the page content area.", { type: "error" });
-      return;
-    }
     document.body.classList.add("ts-active");
-    const app = new TypoSpotterApp(content);
+    const host = document.createElement("div");
+    host.id = "ts-host";
+    document.body.append(host);
+    const app = new TypoSpotterApp(host);
     await app.start();
   }
   void boot().catch((error) => {

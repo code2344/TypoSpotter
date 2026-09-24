@@ -38,6 +38,7 @@ window.mw = {
           pages: [{
             pageid: Number(params.pageids),
             title: mockPages.find((page) => page.pageid === Number(params.pageids))?.title || "History of correspondence",
+            actions: { edit: true },
             revisions: [{
               revid: 99101,
               timestamp: "2026-09-24T04:20:00Z",
