@@ -1,5 +1,5 @@
 // <nowiki>
-// TypoSpotter v0.5.0
+// TypoSpotter v0.5.1
 // Source: https://github.com/code2344/TypoSpotter
 "use strict";
 (() => {
@@ -173,7 +173,7 @@
   };
 
   // src/config.ts
-  var VERSION = "0.5.0";
+  var VERSION = "0.5.1";
   var RUN_PAGE = "User:SuperCode111/TypoSpotter/run";
   var ABOUT_PAGE = "User:SuperCode111/TypoSpotter";
   var EXCLUSIONS_KEY = "TypoSpotter-exclusions-v1";
@@ -712,6 +712,7 @@ body.ts-active > :not(#ts-host) {
       this.root = element("div");
       this.status = element("div", "ts-status");
       this.queueList = element("ul", "ts-queue");
+      this.loadMoreButton = element("button", "ts-button ts-button-quiet ts-load-more");
       this.empty = element("div", "ts-empty");
       this.review = element("section", "ts-review");
       this.title = element("h2", "ts-review-title");
@@ -775,7 +776,10 @@ body.ts-active > :not(#ts-host) {
         stats.append(stat);
         this.statsNodes.set(key, value);
       }
-      sidebar.append(queueHeading, this.queueList, statsHeading, stats);
+      this.loadMoreButton.type = "button";
+      this.loadMoreButton.textContent = "Load more";
+      this.loadMoreButton.addEventListener("click", () => this.actions?.onLoadMore());
+      sidebar.append(queueHeading, this.queueList, this.loadMoreButton, statsHeading, stats);
       const main = element("main", "ts-main");
       this.status.setAttribute("role", "status");
       this.status.setAttribute("aria-live", "polite");
@@ -1123,6 +1127,7 @@ body.ts-active > :not(#ts-host) {
       this.editor.disabled = busy;
       this.summary.disabled = busy;
       this.publishExclusionsButton.disabled = busy || this.pendingExclusionCount === 0;
+      this.loadMoreButton.disabled = busy;
       this.occurrenceList.querySelectorAll(".ts-occurrence-exclude").forEach((button) => {
         button.disabled = busy;
       });
@@ -1298,6 +1303,7 @@ body.ts-active > :not(#ts-host) {
         onRemoveExclusion: (key) => this.removeExclusion(key),
         onClearExclusions: () => this.clearExclusions(),
         onPublishExclusions: () => void this.publishExclusions(),
+        onLoadMore: () => void this.loadMore(),
         onSave: (summary) => void this.save(summary),
         onQueueSelect: (candidate) => void this.selectCandidate(candidate)
       });
@@ -1406,6 +1412,23 @@ body.ts-active > :not(#ts-host) {
     refillInBackground() {
       void this.refillQueue().catch(() => {
       });
+    }
+    async loadMore() {
+      if (this.busy) return;
+      this.busy = true;
+      this.view.setBusy(true);
+      this.view.setStatus("Searching for more reviewable typos\u2026");
+      try {
+        await this.refillQueue(Math.max(8, this.queue.length + 8));
+        this.view.renderQueue(this.current?.candidate, this.queue.map((item) => item.candidate));
+        this.view.setStatus(this.queue.length > 0 ? "More reviewable candidates loaded." : "No more reviewable candidates found.");
+      } catch (error) {
+        this.view.setStatus(errorMessage(error), "error");
+      } finally {
+        this.busy = false;
+        this.view.setBusy(false);
+        if (this.proposal && this.diffText === this.proposal.text) this.view.setSaveEnabled(true);
+      }
     }
     async advance() {
       if (this.busy) return;

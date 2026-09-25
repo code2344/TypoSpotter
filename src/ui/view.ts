@@ -13,6 +13,7 @@ export interface ViewActions {
   onRemoveExclusion(key: string): void;
   onClearExclusions(): void;
   onPublishExclusions(): void;
+  onLoadMore(): void;
   onSave(summary: string): void;
   onQueueSelect(candidate: Candidate): void;
 }
@@ -36,6 +37,7 @@ export class TypoSpotterView {
   private readonly root = element("div");
   private readonly status = element("div", "ts-status");
   private readonly queueList = element("ul", "ts-queue");
+  private readonly loadMoreButton = element("button", "ts-button ts-button-quiet ts-load-more");
   private readonly empty = element("div", "ts-empty");
   private readonly review = element("section", "ts-review");
   private readonly title = element("h2", "ts-review-title");
@@ -104,7 +106,10 @@ export class TypoSpotterView {
       stats.append(stat);
       this.statsNodes.set(key, value);
     }
-    sidebar.append(queueHeading, this.queueList, statsHeading, stats);
+    this.loadMoreButton.type = "button";
+    this.loadMoreButton.textContent = "Load more";
+    this.loadMoreButton.addEventListener("click", () => this.actions?.onLoadMore());
+    sidebar.append(queueHeading, this.queueList, this.loadMoreButton, statsHeading, stats);
 
     const main = element("main", "ts-main");
     this.status.setAttribute("role", "status");
@@ -485,6 +490,7 @@ export class TypoSpotterView {
     this.editor.disabled = busy;
     this.summary.disabled = busy;
     this.publishExclusionsButton.disabled = busy || this.pendingExclusionCount === 0;
+    this.loadMoreButton.disabled = busy;
     this.occurrenceList.querySelectorAll<HTMLButtonElement>(".ts-occurrence-exclude").forEach((button) => {
       button.disabled = busy;
     });

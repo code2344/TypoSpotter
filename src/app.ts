@@ -60,6 +60,7 @@ export class TypoSpotterApp {
       onRemoveExclusion: (key) => this.removeExclusion(key),
       onClearExclusions: () => this.clearExclusions(),
       onPublishExclusions: () => void this.publishExclusions(),
+      onLoadMore: () => void this.loadMore(),
       onSave: (summary) => void this.save(summary),
       onQueueSelect: (candidate) => void this.selectCandidate(candidate)
     });
@@ -188,6 +189,24 @@ export class TypoSpotterApp {
     void this.refillQueue().catch(() => {
       // The current proposal remains usable; the next foreground refill can retry.
     });
+  }
+
+  private async loadMore(): Promise<void> {
+    if (this.busy) return;
+    this.busy = true;
+    this.view.setBusy(true);
+    this.view.setStatus("Searching for more reviewable typos…");
+    try {
+      await this.refillQueue(Math.max(8, this.queue.length + 8));
+      this.view.renderQueue(this.current?.candidate, this.queue.map((item) => item.candidate));
+      this.view.setStatus(this.queue.length > 0 ? "More reviewable candidates loaded." : "No more reviewable candidates found.");
+    } catch (error) {
+      this.view.setStatus(errorMessage(error), "error");
+    } finally {
+      this.busy = false;
+      this.view.setBusy(false);
+      if (this.proposal && this.diffText === this.proposal.text) this.view.setSaveEnabled(true);
+    }
   }
 
   private async advance(): Promise<void> {
