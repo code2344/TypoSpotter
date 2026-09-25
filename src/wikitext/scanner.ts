@@ -102,6 +102,13 @@ function overlapsProtected(start: number, end: number, ranges: Range[]): boolean
   return false;
 }
 
+function replacementForMatch(match: RegExpMatchArray, rule: TypoRule): string {
+  if (!rule.regex) return preserveCase(match[0], rule.replace);
+  // Apply AWB's capture-group replacement syntax to the individual match.
+  const single = new RegExp(rule.find, "u");
+  return match[0].replace(single, rule.replace);
+}
+
 export function preserveCase(source: string, replacement: string): string {
   if (source === source.toUpperCase()) {
     return replacement.toUpperCase();
@@ -137,7 +144,7 @@ export function findOccurrences(text: string, rule: TypoRule): Occurrence[] {
       start,
       end,
       matched: match[0],
-      replacement: preserveCase(match[0], rule.replace),
+      replacement: replacementForMatch(match, rule),
       before: text.slice(Math.max(0, start - 240), start),
       after: text.slice(end, Math.min(text.length, end + 240))
     });

@@ -1,5 +1,5 @@
 // <nowiki>
-// TypoSpotter v0.6.1
+// TypoSpotter v0.6.2
 // Source: https://github.com/code2344/TypoSpotter
 "use strict";
 (() => {
@@ -226,7 +226,7 @@
   };
 
   // src/config.ts
-  var VERSION = "0.6.1";
+  var VERSION = "0.6.2";
   var RUN_PAGE = "User:SuperCode111/TypoSpotter/run";
   var ABOUT_PAGE = "User:SuperCode111/TypoSpotter";
   var EXCLUSIONS_KEY = "TypoSpotter-exclusions-v1";
@@ -1261,6 +1261,11 @@ body.ts-active > :not(#ts-host) {
     }
     return false;
   }
+  function replacementForMatch(match, rule) {
+    if (!rule.regex) return preserveCase(match[0], rule.replace);
+    const single = new RegExp(rule.find, "u");
+    return match[0].replace(single, rule.replace);
+  }
   function preserveCase(source, replacement) {
     if (source === source.toUpperCase()) {
       return replacement.toUpperCase();
@@ -1293,7 +1298,7 @@ body.ts-active > :not(#ts-host) {
         start,
         end,
         matched: match[0],
-        replacement: preserveCase(match[0], rule.replace),
+        replacement: replacementForMatch(match, rule),
         before: text.slice(Math.max(0, start - 240), start),
         after: text.slice(end, Math.min(text.length, end + 240))
       });

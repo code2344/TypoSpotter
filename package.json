@@ -1,6 +1,6 @@
 {
   "name": "typospotter",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "private": true,
   "type": "module",
   "description": "A human-reviewed typo fixing userscript for English Wikipedia",
