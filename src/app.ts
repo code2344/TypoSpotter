@@ -2,6 +2,7 @@ import { MediaWikiApi, TypoSpotterApiError } from "./api/mediawiki";
 import { ABOUT_PAGE, COMMUNITY_EXCLUSIONS_PAGE, editSummary, isIgnoredTitle, QUEUE_TARGET, VERSION } from "./config";
 import { buildLocalDiff } from "./diff/local";
 import { RULES } from "./rules/catalog";
+import type { TypoRule } from "./types";
 import { ExclusionStore } from "./state/exclusions";
 import { parseCommunityExclusions, serializeCommunityExclusions } from "./state/community";
 import type { Candidate, ExclusionEntry, PreparedCandidate, Proposal, SessionStats } from "./types";
@@ -47,6 +48,7 @@ export class TypoSpotterApp {
   private loadedCount = 0;
   private refillPromise?: Promise<void>;
   private communityExclusions: ExclusionEntry[] = [];
+  private rules: TypoRule[] = RULES;
 
   constructor(container: HTMLElement) {
     this.view = new TypoSpotterView(container);
@@ -79,11 +81,25 @@ export class TypoSpotterApp {
     this.view.setStatus("Searching English Wikipedia for a small set of likely typos…");
     try {
       await this.loadCommunityExclusions();
+      await this.loadRules();
       await this.refillQueue(1);
       await this.advance();
     } catch (error) {
       this.view.showEmpty("Could not start TypoSpotter", errorMessage(error));
       this.view.setStatus(errorMessage(error), "error");
+    }
+  }
+
+  private async loadRules(): Promise<void> {
+    try {
+      const imported = await this.api.loadAwbTypos();
+      if (imported.length > 0) {
+        const merged = new Map<string, TypoRule>();
+        for (const rule of [...RULES, ...imported]) merged.set(rule.id, rule);
+        this.rules = [...merged.values()];
+      }
+    } catch {
+      this.rules = RULES;
     }
   }
 
@@ -124,10 +140,10 @@ export class TypoSpotterApp {
       batchesTried += 1;
 
       const rules = Array.from({ length: SEARCH_RULES_PER_BATCH }, (_, offset) => {
-        const index = (this.nextRuleIndex + offset) % RULES.length;
-        return RULES[index];
-      }).filter((rule): rule is (typeof RULES)[number] => Boolean(rule));
-      this.nextRuleIndex = (this.nextRuleIndex + SEARCH_RULES_PER_BATCH) % RULES.length;
+        const index = (this.nextRuleIndex + offset) % this.rules.length;
+        return this.rules[index];
+      }).filter((rule): rule is TypoRule => Boolean(rule));
+      this.nextRuleIndex = (this.nextRuleIndex + SEARCH_RULES_PER_BATCH) % this.rules.length;
 
       const batches = await Promise.allSettled(
         rules.map((rule) => this.api.search(rule, this.continuations.get(rule.id)))

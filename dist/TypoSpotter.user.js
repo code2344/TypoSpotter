@@ -1,8 +1,57 @@
 // <nowiki>
-// TypoSpotter v0.5.1
+// TypoSpotter v0.6.0
 // Source: https://github.com/code2344/TypoSpotter
 "use strict";
 (() => {
+  // src/rules/catalog.ts
+  var RULES = [
+    { id: "recieve", find: "recieve", replace: "receive", note: "Common letter transposition" },
+    { id: "seperate", find: "seperate", replace: "separate", note: "Common misspelling" },
+    { id: "definately", find: "definately", replace: "definitely", note: "Common misspelling" },
+    { id: "occured", find: "occured", replace: "occurred", note: "Missing doubled consonant" },
+    { id: "untill", find: "untill", replace: "until", note: "Extra final consonant" },
+    { id: "accomodate", find: "accomodate", replace: "accommodate", note: "Missing doubled consonant" },
+    { id: "begining", find: "begining", replace: "beginning", note: "Missing doubled consonant" },
+    { id: "existance", find: "existance", replace: "existence", note: "Common misspelling" },
+    { id: "goverment", find: "goverment", replace: "government", note: "Missing letter" },
+    { id: "independant", find: "independant", replace: "independent", note: "Common misspelling" },
+    { id: "maintainance", find: "maintainance", replace: "maintenance", note: "Common misspelling" },
+    { id: "neccessary", find: "neccessary", replace: "necessary", note: "Incorrect doubled consonant" },
+    { id: "posession", find: "posession", replace: "possession", note: "Missing doubled consonant" },
+    { id: "prefered", find: "prefered", replace: "preferred", note: "Missing doubled consonant" },
+    { id: "publically", find: "publically", replace: "publicly", note: "Common misspelling" },
+    { id: "refering", find: "refering", replace: "referring", note: "Missing doubled consonant" },
+    { id: "succesful", find: "succesful", replace: "successful", note: "Missing doubled consonant" },
+    { id: "tommorow", find: "tommorow", replace: "tomorrow", note: "Common misspelling" },
+    { id: "wierd", find: "wierd", replace: "weird", note: "Common letter transposition" },
+    { id: "withold", find: "withold", replace: "withhold", note: "Missing letter" }
+  ];
+  var ATTRIBUTE = /([A-Za-z]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
+  function decode(value) {
+    return value.replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+  }
+  function parseAwbTypos(xml) {
+    const rules = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const match of xml.matchAll(/<Typo\b([^>]*?)(?:\/?>)/gi)) {
+      const attributes = {};
+      for (const attribute of (match[1] ?? "").matchAll(ATTRIBUTE)) {
+        const name = attribute[1];
+        if (name) attributes[name.toLowerCase()] = decode(attribute[2] ?? attribute[3] ?? "");
+      }
+      const find = attributes.find;
+      const replace = attributes.replace;
+      if (!find || replace === void 0 || attributes.disabled !== void 0) continue;
+      const id = `awb:${find}\0${replace}`;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const search = find.replace(/\\[bB]|\\p\{[^}]+\}|[^\p{L}\p{N}' -]/gu, " ").trim().split(/\s+/u)[0];
+      if (!search) continue;
+      rules.push({ id, find, replace, note: attributes.word || "AutoWikiBrowser typo rule", regex: true, search });
+    }
+    return rules;
+  }
+
   // src/api/mediawiki.ts
   var TypoSpotterApiError = class extends Error {
     constructor(message, code = "unknown", details) {
@@ -42,6 +91,10 @@
     constructor() {
       this.api = new mw.Api();
     }
+    async loadAwbTypos() {
+      const snapshot = await this.loadPageByTitle("Wikipedia:AutoWikiBrowser/Typos");
+      return parseAwbTypos(snapshot.text);
+    }
     async search(rule, continueToken, limit = 8) {
       try {
         const response = await this.api.get({
@@ -50,7 +103,7 @@
           // CirrusSearch's regex engine does not support JavaScript-style word
           // boundaries. Discovery is literal; the local scanner enforces exact
           // whole-word matching against the freshly fetched revision.
-          srsearch: `${rule.find} insource:"${quoteForCirrus(rule.find)}"`,
+          srsearch: `${rule.search || rule.find} insource:"${quoteForCirrus(rule.search || rule.find)}"`,
           srnamespace: 0,
           srlimit: limit,
           sroffset: continueToken,
@@ -173,7 +226,7 @@
   };
 
   // src/config.ts
-  var VERSION = "0.5.1";
+  var VERSION = "0.6.0";
   var RUN_PAGE = "User:SuperCode111/TypoSpotter/run";
   var ABOUT_PAGE = "User:SuperCode111/TypoSpotter";
   var EXCLUSIONS_KEY = "TypoSpotter-exclusions-v1";
@@ -241,30 +294,6 @@
     }
     return rows;
   }
-
-  // src/rules/catalog.ts
-  var RULES = [
-    { id: "recieve", find: "recieve", replace: "receive", note: "Common letter transposition" },
-    { id: "seperate", find: "seperate", replace: "separate", note: "Common misspelling" },
-    { id: "definately", find: "definately", replace: "definitely", note: "Common misspelling" },
-    { id: "occured", find: "occured", replace: "occurred", note: "Missing doubled consonant" },
-    { id: "untill", find: "untill", replace: "until", note: "Extra final consonant" },
-    { id: "accomodate", find: "accomodate", replace: "accommodate", note: "Missing doubled consonant" },
-    { id: "begining", find: "begining", replace: "beginning", note: "Missing doubled consonant" },
-    { id: "existance", find: "existance", replace: "existence", note: "Common misspelling" },
-    { id: "goverment", find: "goverment", replace: "government", note: "Missing letter" },
-    { id: "independant", find: "independant", replace: "independent", note: "Common misspelling" },
-    { id: "maintainance", find: "maintainance", replace: "maintenance", note: "Common misspelling" },
-    { id: "neccessary", find: "neccessary", replace: "necessary", note: "Incorrect doubled consonant" },
-    { id: "posession", find: "posession", replace: "possession", note: "Missing doubled consonant" },
-    { id: "prefered", find: "prefered", replace: "preferred", note: "Missing doubled consonant" },
-    { id: "publically", find: "publically", replace: "publicly", note: "Common misspelling" },
-    { id: "refering", find: "refering", replace: "referring", note: "Missing doubled consonant" },
-    { id: "succesful", find: "succesful", replace: "successful", note: "Missing doubled consonant" },
-    { id: "tommorow", find: "tommorow", replace: "tomorrow", note: "Common misspelling" },
-    { id: "wierd", find: "wierd", replace: "weird", note: "Common letter transposition" },
-    { id: "withold", find: "withold", replace: "withhold", note: "Missing letter" }
-  ];
 
   // src/state/exclusions.ts
   var CONTEXT_LENGTH = 160;
@@ -1235,7 +1264,12 @@ body.ts-active > :not(#ts-host) {
   }
   function findOccurrences(text, rule) {
     const ranges = protectedRanges(text);
-    const expression = new RegExp(`\\b${escapeRegExp(rule.find)}\\b`, "gi");
+    let expression;
+    try {
+      expression = rule.regex ? new RegExp(rule.find, "giu") : new RegExp(`\\b${escapeRegExp(rule.find)}\\b`, "giu");
+    } catch {
+      return [];
+    }
     const occurrences = [];
     for (const match of text.matchAll(expression)) {
       if (match.index === void 0) {
@@ -1292,6 +1326,7 @@ body.ts-active > :not(#ts-host) {
       this.busy = false;
       this.loadedCount = 0;
       this.communityExclusions = [];
+      this.rules = RULES;
       this.view = new TypoSpotterView(container);
       this.view.setActions({
         onOccurrenceChange: (id, selected) => this.changeOccurrence(id, selected),
@@ -1320,11 +1355,24 @@ body.ts-active > :not(#ts-host) {
       this.view.setStatus("Searching English Wikipedia for a small set of likely typos\u2026");
       try {
         await this.loadCommunityExclusions();
+        await this.loadRules();
         await this.refillQueue(1);
         await this.advance();
       } catch (error) {
         this.view.showEmpty("Could not start TypoSpotter", errorMessage(error));
         this.view.setStatus(errorMessage(error), "error");
+      }
+    }
+    async loadRules() {
+      try {
+        const imported = await this.api.loadAwbTypos();
+        if (imported.length > 0) {
+          const merged = /* @__PURE__ */ new Map();
+          for (const rule of [...RULES, ...imported]) merged.set(rule.id, rule);
+          this.rules = [...merged.values()];
+        }
+      } catch {
+        this.rules = RULES;
       }
     }
     candidateKey(candidate) {
@@ -1358,10 +1406,10 @@ body.ts-active > :not(#ts-host) {
       while (this.queue.length < target && batchesTried < MAX_SEARCH_BATCHES_PER_REFILL) {
         batchesTried += 1;
         const rules = Array.from({ length: SEARCH_RULES_PER_BATCH }, (_, offset) => {
-          const index = (this.nextRuleIndex + offset) % RULES.length;
-          return RULES[index];
+          const index = (this.nextRuleIndex + offset) % this.rules.length;
+          return this.rules[index];
         }).filter((rule) => Boolean(rule));
-        this.nextRuleIndex = (this.nextRuleIndex + SEARCH_RULES_PER_BATCH) % RULES.length;
+        this.nextRuleIndex = (this.nextRuleIndex + SEARCH_RULES_PER_BATCH) % this.rules.length;
         const batches = await Promise.allSettled(
           rules.map((rule) => this.api.search(rule, this.continuations.get(rule.id)))
         );

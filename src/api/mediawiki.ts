@@ -1,4 +1,5 @@
 import type { Candidate, PageSnapshot, SearchBatch, TypoRule } from "../types";
+import { parseAwbTypos } from "../rules/catalog";
 
 export class TypoSpotterApiError extends Error {
   constructor(
@@ -45,6 +46,11 @@ function quoteForCirrus(value: string): string {
 export class MediaWikiApi {
   private readonly api = new mw.Api();
 
+  async loadAwbTypos(): Promise<TypoRule[]> {
+    const snapshot = await this.loadPageByTitle("Wikipedia:AutoWikiBrowser/Typos");
+    return parseAwbTypos(snapshot.text);
+  }
+
   async search(rule: TypoRule, continueToken?: number, limit = 8): Promise<SearchBatch> {
     try {
       const response = await this.api.get({
@@ -53,7 +59,7 @@ export class MediaWikiApi {
         // CirrusSearch's regex engine does not support JavaScript-style word
         // boundaries. Discovery is literal; the local scanner enforces exact
         // whole-word matching against the freshly fetched revision.
-        srsearch: `${rule.find} insource:"${quoteForCirrus(rule.find)}"`,
+        srsearch: `${rule.search || rule.find} insource:"${quoteForCirrus(rule.search || rule.find)}"`,
         srnamespace: 0,
         srlimit: limit,
         sroffset: continueToken,

@@ -114,7 +114,12 @@ export function preserveCase(source: string, replacement: string): string {
 
 export function findOccurrences(text: string, rule: TypoRule): Occurrence[] {
   const ranges = protectedRanges(text);
-  const expression = new RegExp(`\\b${escapeRegExp(rule.find)}\\b`, "gi");
+  let expression: RegExp;
+  try {
+    expression = rule.regex ? new RegExp(rule.find, "giu") : new RegExp(`\\b${escapeRegExp(rule.find)}\\b`, "giu");
+  } catch {
+    return [];
+  }
   const occurrences: Occurrence[] = [];
 
   for (const match of text.matchAll(expression)) {

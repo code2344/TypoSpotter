@@ -25,3 +25,32 @@ export const RULES: TypoRule[] = [
   { id: "wierd", find: "wierd", replace: "weird", note: "Common letter transposition" },
   { id: "withold", find: "withold", replace: "withhold", note: "Missing letter" }
 ];
+
+const ATTRIBUTE = /([A-Za-z]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
+
+function decode(value: string): string {
+  return value.replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+}
+
+/** Parse the XML format used by Wikipedia:AutoWikiBrowser/Typos. */
+export function parseAwbTypos(xml: string): TypoRule[] {
+  const rules: TypoRule[] = [];
+  const seen = new Set<string>();
+  for (const match of xml.matchAll(/<Typo\b([^>]*?)(?:\/?>)/gi)) {
+    const attributes: Record<string, string> = {};
+    for (const attribute of (match[1] ?? "").matchAll(ATTRIBUTE)) {
+      const name = attribute[1];
+      if (name) attributes[name.toLowerCase()] = decode(attribute[2] ?? attribute[3] ?? "");
+    }
+    const find = attributes.find;
+    const replace = attributes.replace;
+    if (!find || replace === undefined || attributes.disabled !== undefined) continue;
+    const id = `awb:${find}\u0000${replace}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const search = find.replace(/\\[bB]|\\p\{[^}]+\}|[^\p{L}\p{N}' -]/gu, " ").trim().split(/\s+/u)[0];
+    if (!search) continue;
+    rules.push({ id, find, replace, note: attributes.word || "AutoWikiBrowser typo rule", regex: true, search });
+  }
+  return rules;
+}

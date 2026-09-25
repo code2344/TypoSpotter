@@ -3,6 +3,8 @@ export interface TypoRule {
   find: string;
   replace: string;
   note: string;
+  regex?: boolean;
+  search?: string;
 }
 
 export interface Candidate {
