@@ -194,7 +194,7 @@ Do not set the `bot` flag. Do not send a custom change tag unless the tag has ac
 Default summary format:
 
 ```text
-Fix typo: "recieve" -> "receive" ([[User:SuperCode111/TypoSpotter|TS v0.6.0]])
+Fix typo: "recieve" -> "receive" ([[User:SuperCode111/TypoSpotter|TS v0.6.1]])
 ```
 
 Use straight ASCII quotation marks and `->` exactly as shown. The link label contains the version of the script that performed the edit and must be generated from the same version constant used by the application UI and bundle metadata rather than repeated as an unrelated string.

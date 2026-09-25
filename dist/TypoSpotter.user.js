@@ -1,5 +1,5 @@
 // <nowiki>
-// TypoSpotter v0.6.0
+// TypoSpotter v0.6.1
 // Source: https://github.com/code2344/TypoSpotter
 "use strict";
 (() => {
@@ -226,7 +226,7 @@
   };
 
   // src/config.ts
-  var VERSION = "0.6.0";
+  var VERSION = "0.6.1";
   var RUN_PAGE = "User:SuperCode111/TypoSpotter/run";
   var ABOUT_PAGE = "User:SuperCode111/TypoSpotter";
   var EXCLUSIONS_KEY = "TypoSpotter-exclusions-v1";
@@ -237,6 +237,14 @@
   ]);
   function isIgnoredTitle(title) {
     return IGNORED_TITLES.has(title.trim().replaceAll("_", " ").toLowerCase());
+  }
+  function titleContainsRule(title, rule) {
+    try {
+      const expression = rule.regex ? new RegExp(rule.find, "iu") : new RegExp(`(?<![A-Za-z])${rule.find.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}(?![A-Za-z])`, "iu");
+      return expression.test(title);
+    } catch {
+      return false;
+    }
   }
   function editSummary(find, replacement) {
     return `Fix typo: "${find}" -> "${replacement}" ([[${ABOUT_PAGE}|TS v${VERSION}]])`;
@@ -1426,7 +1434,7 @@ body.ts-active > :not(#ts-host) {
           }
           for (const candidate of result.value.candidates) {
             const key = this.candidateKey(candidate);
-            if (isIgnoredTitle(candidate.title) || this.seen.has(key) || this.exclusions.hasPageRule(candidate.pageId, candidate.rule.id) || this.communityExclusions.some((entry) => entry.scope === "page" && entry.pageId === candidate.pageId && entry.ruleId === candidate.rule.id)) continue;
+            if (isIgnoredTitle(candidate.title) || titleContainsRule(candidate.title, candidate.rule) || this.seen.has(key) || this.exclusions.hasPageRule(candidate.pageId, candidate.rule.id) || this.communityExclusions.some((entry) => entry.scope === "page" && entry.pageId === candidate.pageId && entry.ruleId === candidate.rule.id)) continue;
             this.seen.add(key);
             candidates.push(candidate);
           }

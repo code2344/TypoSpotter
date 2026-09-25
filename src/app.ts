@@ -1,5 +1,5 @@
 import { MediaWikiApi, TypoSpotterApiError } from "./api/mediawiki";
-import { ABOUT_PAGE, COMMUNITY_EXCLUSIONS_PAGE, editSummary, isIgnoredTitle, QUEUE_TARGET, VERSION } from "./config";
+import { ABOUT_PAGE, COMMUNITY_EXCLUSIONS_PAGE, editSummary, isIgnoredTitle, QUEUE_TARGET, titleContainsRule, VERSION } from "./config";
 import { buildLocalDiff } from "./diff/local";
 import { RULES } from "./rules/catalog";
 import type { TypoRule } from "./types";
@@ -163,6 +163,7 @@ export class TypoSpotterApp {
           const key = this.candidateKey(candidate);
           if (
             isIgnoredTitle(candidate.title) ||
+            titleContainsRule(candidate.title, candidate.rule) ||
             this.seen.has(key) ||
             this.exclusions.hasPageRule(candidate.pageId, candidate.rule.id) ||
             this.communityExclusions.some((entry) => entry.scope === "page" && entry.pageId === candidate.pageId && entry.ruleId === candidate.rule.id)

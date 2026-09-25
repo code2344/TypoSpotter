@@ -8,8 +8,21 @@ export const IGNORED_TITLES = new Set([
   "commonly misspelled english words"
 ]);
 
+import type { TypoRule } from "./types";
+
 export function isIgnoredTitle(title: string): boolean {
   return IGNORED_TITLES.has(title.trim().replaceAll("_", " ").toLowerCase());
+}
+
+export function titleContainsRule(title: string, rule: TypoRule): boolean {
+  try {
+    const expression = rule.regex
+      ? new RegExp(rule.find, "iu")
+      : new RegExp(`(?<![A-Za-z])${rule.find.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}(?![A-Za-z])`, "iu");
+    return expression.test(title);
+  } catch {
+    return false;
+  }
 }
 
 export function editSummary(find: string, replacement: string): string {
